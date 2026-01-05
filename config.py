@@ -48,15 +48,9 @@ class KalshiConfig(BaseModel):
         return v
 
 class OctagonConfig(BaseModel):
-    """Octagon Deep Research API configuration."""
-    api_key: str = Field(..., description="Octagon API key")
+    """Octagon Deep Research API configuration (optional - now uses OpenAI)."""
+    api_key: str = Field(default="unused", description="Octagon API key (optional)")
     base_url: str = Field(default="https://api.octagon.ai", description="Octagon API base URL")
-    
-    @validator('api_key')
-    def validate_api_key(cls, v):
-        if not v or v == "your_octagon_api_key_here":
-            raise ValueError("OCTAGON_API_KEY is required. Please set it in your .env file.")
-        return v
 
 class OpenAIConfig(BaseModel):
     """OpenAI API configuration."""
