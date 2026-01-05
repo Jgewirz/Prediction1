@@ -21,10 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import load_config
 from db import get_database, get_postgres_database
 from dashboard.websocket import manager, handle_websocket, WebSocketMessage, MessageType
-from dashboard.auth import (
-    auth_router, create_user_table, require_auth, TokenData,
-    get_user_by_email, get_user_count
-)
 
 app = FastAPI(
     title="Kalshi Trading Bot Dashboard",
@@ -382,10 +378,6 @@ async def startup():
     db = await get_db()
     print("Dashboard API started - Database connected")
 
-    # Create users table for authentication
-    await create_user_table(db)
-    print("User authentication table initialized")
-
     # Start WebSocket heartbeat loop
     asyncio.create_task(manager.heartbeat_loop())
     print("WebSocket heartbeat loop started")
@@ -409,111 +401,6 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
-
-
-# === Authentication Routes ===
-
-# Inject database into auth routes
-@auth_router.on_event("startup")
-async def auth_startup():
-    pass  # DB is already initialized
-
-# Override auth router endpoints to inject db
-from fastapi import APIRouter
-from fastapi.security import OAuth2PasswordRequestForm
-
-@app.post("/api/auth/register")
-async def register_user(user_data: dict):
-    """Register a new user."""
-    from dashboard.auth import UserCreate, create_user, get_password_hash, create_access_token, UserResponse
-    db = await get_db()
-
-    # Check if user exists
-    existing = await get_user_by_email(db, user_data["email"])
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Create user
-    user = UserCreate(**user_data)
-    new_user = await create_user(db, user)
-
-    # Generate token
-    from dashboard.auth import ACCESS_TOKEN_EXPIRE_MINUTES
-    access_token = create_access_token(
-        data={"sub": new_user["id"], "email": new_user["email"], "is_admin": new_user.get("is_admin", False)}
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        "user": {
-            "id": new_user["id"],
-            "email": new_user["email"],
-            "name": new_user["name"],
-            "is_active": new_user.get("is_active", True),
-            "is_admin": new_user.get("is_admin", False),
-            "created_at": str(new_user["created_at"]),
-            "last_login": None
-        }
-    }
-
-
-@app.post("/api/auth/login")
-async def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Login with email and password."""
-    from dashboard.auth import verify_password, update_last_login, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-    db = await get_db()
-
-    user = await get_user_by_email(db, form_data.username)
-
-    if not user or not verify_password(form_data.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-
-    if not user.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Account is disabled")
-
-    # Update last login
-    await update_last_login(db, user["id"])
-
-    # Generate token
-    access_token = create_access_token(
-        data={"sub": user["id"], "email": user["email"], "is_admin": user.get("is_admin", False)}
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "is_active": user.get("is_active", True),
-            "is_admin": user.get("is_admin", False),
-            "created_at": str(user["created_at"]),
-            "last_login": str(user.get("last_login")) if user.get("last_login") else None
-        }
-    }
-
-
-@app.get("/api/auth/me")
-async def get_current_user_info(token_data: TokenData = Depends(require_auth)):
-    """Get current user profile."""
-    from dashboard.auth import get_user_by_id
-    db = await get_db()
-    user = await get_user_by_id(db, token_data.user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {
-        "id": user["id"],
-        "email": user["email"],
-        "name": user["name"],
-        "is_active": user.get("is_active", True),
-        "is_admin": user.get("is_admin", False),
-        "created_at": str(user["created_at"]),
-        "last_login": str(user.get("last_login")) if user.get("last_login") else None
-    }
 
 
 # === WebSocket Endpoints ===
