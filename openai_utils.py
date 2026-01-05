@@ -1,13 +1,13 @@
 """
-Utilities for working with OpenAI Responses API (GPT-5 compatible).
+Utilities for working with OpenAI API for structured outputs.
 
 This module provides helpers to:
-- Create responses with message-style input
-- Extract the completed assistant message (handles reasoning-first outputs)
-- Parse structured outputs into Pydantic models using Responses API
+- Create chat completions with message-style input
+- Parse structured outputs into Pydantic models using JSON mode
+- Handle both standard and beta structured output APIs
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Type, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar, cast
 import json
 
 from pydantic import BaseModel
@@ -18,13 +18,12 @@ T = TypeVar("T", bound=BaseModel)
 
 def _normalize_messages_input(messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Convert chat-style messages into Responses API input format (list of role/content dicts).
+    Convert chat-style messages into standard format (list of role/content dicts).
 
     Accepts already-correct structures and passes them through unchanged.
     """
     normalized: List[Dict[str, Any]] = []
     for msg in messages:
-        # If content is already a list of parts, keep as-is; otherwise wrap text
         content = msg.get("content")
         if isinstance(content, list):
             normalized.append({"role": msg.get("role", "user"), "content": content})
@@ -33,38 +32,140 @@ def _normalize_messages_input(messages: Sequence[Dict[str, Any]]) -> List[Dict[s
     return normalized
 
 
-def extract_completed_message_text(response: Any) -> str:
+def extract_message_text(response: Any) -> str:
     """
-    Extract plain text from the completed assistant message in a Responses API result.
+    Extract plain text from a chat completion response.
 
-    Handles outputs that include a reasoning step before the completed message.
+    Handles both SDK objects and dict responses.
     Returns an empty string if nothing is found.
     """
-    text_chunks: List[str] = []
-
     try:
-        output_items = getattr(response, "output", None) or response.get("output", [])  # type: ignore[attr-defined]
+        # SDK response object
+        if hasattr(response, 'choices') and len(response.choices) > 0:
+            message = response.choices[0].message
+            if hasattr(message, 'content') and message.content:
+                return message.content.strip()
+        # Dict response
+        elif isinstance(response, dict):
+            choices = response.get('choices', [])
+            if choices and len(choices) > 0:
+                message = choices[0].get('message', {})
+                content = message.get('content', '')
+                if content:
+                    return content.strip()
     except Exception:
-        output_items = []
-
-    for item in output_items or []:
-        # SDK objects expose attributes; JSON dicts expose keys – support both
-        item_type = getattr(item, "type", None) or (isinstance(item, dict) and item.get("type"))
-        item_status = getattr(item, "status", None) or (isinstance(item, dict) and item.get("status"))
-        if item_type == "message" and item_status == "completed":
-            content = getattr(item, "content", None) or (isinstance(item, dict) and item.get("content")) or []
-            for part in content or []:
-                part_type = getattr(part, "type", None) or (isinstance(part, dict) and part.get("type"))
-                if part_type == "output_text":
-                    # SDK: part.text; JSON: part["text"]
-                    text_value = getattr(part, "text", None) or (isinstance(part, dict) and part.get("text"))
-                    if isinstance(text_value, str) and text_value:
-                        text_chunks.append(text_value)
-            break
-
-    return "".join(text_chunks).strip()
+        pass
+    return ""
 
 
+async def create_text_completion(
+    client: Any,
+    *,
+    model: str,
+    messages: Sequence[Dict[str, Any]],
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> str:
+    """
+    Create a chat completion and extract the assistant text.
+
+    Falls back to an empty string if no content is present.
+    """
+    normalized = _normalize_messages_input(messages)
+
+    response = await client.chat.completions.create(
+        model=model,
+        messages=normalized,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+    return extract_message_text(response)
+
+
+async def parse_pydantic_response(
+    client: Any,
+    *,
+    model: str,
+    messages: Sequence[Dict[str, Any]],
+    response_format: Type[T],
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> T:
+    """
+    Parse structured output using OpenAI API into the provided Pydantic model type.
+
+    Uses JSON mode with schema instructions to ensure valid JSON output.
+    Falls back to text parsing if structured output is not available.
+    """
+    normalized = _normalize_messages_input(messages)
+
+    # Build JSON schema from the Pydantic model
+    try:
+        schema = response_format.model_json_schema()
+    except Exception:
+        # Pydantic v1 fallback
+        schema = response_format.schema()  # type: ignore[attr-defined]
+
+    # Inject a strict schema instruction to ensure JSON-only output
+    schema_str = json.dumps(schema, indent=2)
+    schema_instruction = {
+        "role": "system",
+        "content": (
+            "You must respond with ONLY a single valid JSON object that matches the following JSON Schema. "
+            "Do not include any prose, code fences, markdown, or additional text. "
+            "Output pure JSON only.\n\n"
+            f"JSON Schema:\n{schema_str}"
+        ),
+    }
+
+    # Prepend schema instruction
+    messages_with_schema = [schema_instruction] + list(normalized)
+
+    # Try using JSON mode for more reliable output
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages_with_schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+    except Exception:
+        # Fall back to regular completion if JSON mode not supported
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages_with_schema,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    # Parse JSON from the response
+    text_value = extract_message_text(response)
+    if text_value:
+        # Clean up any markdown code fences
+        text_value = text_value.strip()
+        if text_value.startswith("```json"):
+            text_value = text_value[7:]
+        elif text_value.startswith("```"):
+            text_value = text_value[3:]
+        if text_value.endswith("```"):
+            text_value = text_value[:-3]
+        text_value = text_value.strip()
+
+        try:
+            data = json.loads(text_value)
+            try:
+                return cast(T, response_format.model_validate(data))
+            except Exception:
+                return cast(T, response_format.parse_obj(data))  # type: ignore[attr-defined]
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Structured output parsing failed: invalid JSON in model output: {exc}\nOutput: {text_value[:500]}")
+
+    raise RuntimeError("Structured output parsing failed: no content found in API response.")
+
+
+# Backwards compatibility aliases
 async def responses_create_text(
     client: Any,
     *,
@@ -74,19 +175,16 @@ async def responses_create_text(
     text_verbosity: str = "medium",
 ) -> str:
     """
-    Create a Responses API call for free-form text and extract the assistant text.
+    Backwards compatible wrapper - uses standard chat completions.
 
-    Falls back to an empty string if no completed message is present.
+    The reasoning_effort and text_verbosity parameters are ignored
+    as they are not supported by standard OpenAI models.
     """
-    normalized = _normalize_messages_input(messages)
-    response = await client.responses.create(
+    return await create_text_completion(
+        client,
         model=model,
-        input=normalized,
-        reasoning={"effort": reasoning_effort},
-        text={"verbosity": text_verbosity},
+        messages=messages,
     )
-
-    return extract_completed_message_text(response)
 
 
 async def responses_parse_pydantic(
@@ -99,54 +197,14 @@ async def responses_parse_pydantic(
     text_verbosity: str = "medium",
 ) -> T:
     """
-    Parse structured output using Responses API into the provided Pydantic model type.
+    Backwards compatible wrapper - uses standard chat completions with JSON mode.
 
-    Supports SDK objects exposing `output_parsed` or dicts with the same key.
-    As a fallback, will attempt to locate a completed message and read a `.parsed` field
-    if present on that message (for compatibility with interim SDK behaviors).
+    The reasoning_effort and text_verbosity parameters are ignored
+    as they are not supported by standard OpenAI models.
     """
-    normalized = _normalize_messages_input(messages)
-
-    # Build JSON schema from the Pydantic model
-    try:
-        schema = response_format.model_json_schema()
-    except Exception:
-        # Pydantic v1 fallback
-        schema = response_format.schema()  # type: ignore[attr-defined]
-
-    # Inject a strict schema instruction to ensure JSON-only output
-    schema_str = json.dumps(schema)
-    schema_instruction = {
-        "role": "system",
-        "content": (
-            "You must respond with ONLY a single JSON object that validates against the following JSON Schema. "
-            "Do not include any prose, code fences, or additional text. If a field is optional, omit it instead of writing null.\n\n"
-            f"JSON Schema: {schema_str}"
-        ),
-    }
-
-    # Prepend schema instruction
-    normalized_with_schema = [schema_instruction] + list(normalized)
-
-    resp = await client.responses.create(
+    return await parse_pydantic_response(
+        client,
         model=model,
-        input=normalized_with_schema,
-        reasoning={"effort": reasoning_effort},
-        text={"verbosity": text_verbosity},
+        messages=messages,
+        response_format=response_format,
     )
-
-    # Parse JSON from the completed message text
-    text_value = extract_completed_message_text(resp)
-    if text_value:
-        try:
-            data = json.loads(text_value)
-            try:
-                return cast(T, response_format.model_validate(data))
-            except Exception:
-                return cast(T, response_format.parse_obj(data))  # type: ignore[attr-defined]
-        except Exception as exc:
-            raise RuntimeError(f"Structured output parsing failed: invalid JSON in model output: {exc}")
-
-    raise RuntimeError("Structured output parsing failed: no output_parsed or JSON text found in Responses API result.")
-
-

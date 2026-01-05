@@ -1,0 +1,101 @@
+# Render Blueprint - Kalshi Deep Trading Bot
+# Deploy: Connect GitHub repo to Render, it will auto-detect this file
+
+services:
+  # Web Dashboard - serves the UI and API
+  - type: web
+    name: kalshi-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: uv run uvicorn dashboard.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: KALSHI_USE_DEMO
+        value: "false"
+      - key: DB_TYPE
+        value: postgres
+      - key: ENABLE_DB
+        value: "true"
+      - key: SAVE_TO_CSV
+        value: "false"
+      - key: AUTO_RECONCILE
+        value: "true"
+      - key: ENABLE_KILL_SWITCH
+        value: "true"
+      - key: TRENDRADAR_ENABLED
+        value: "false"
+      # Secrets - set these in Render dashboard
+      - key: KALSHI_API_KEY
+        sync: false
+      - key: KALSHI_PRIVATE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PGHOST
+        sync: false
+      - key: PGDATABASE
+        sync: false
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGSSLMODE
+        value: require
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DASHBOARD_API_KEY
+        generateValue: true
+    autoDeploy: true
+
+  # Background Worker - runs the continuous trading bot
+  - type: worker
+    name: kalshi-trader
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: uv run python -m continuous_bot --live
+    envVars:
+      - key: KALSHI_USE_DEMO
+        value: "false"
+      - key: DB_TYPE
+        value: postgres
+      - key: ENABLE_DB
+        value: "true"
+      - key: SAVE_TO_CSV
+        value: "false"
+      - key: AUTO_RECONCILE
+        value: "true"
+      - key: ENABLE_KILL_SWITCH
+        value: "true"
+      - key: TRENDRADAR_ENABLED
+        value: "false"
+      # Risk settings
+      - key: BANKROLL
+        value: "10.0"
+      - key: MAX_BET_AMOUNT
+        value: "2.50"
+      - key: Z_THRESHOLD
+        value: "1.5"
+      - key: KELLY_FRACTION
+        value: "0.25"
+      - key: MAX_DAILY_LOSS
+        value: "5.0"
+      - key: MAX_DAILY_LOSS_PCT
+        value: "0.50"
+      # Secrets - must match web service
+      - key: KALSHI_API_KEY
+        sync: false
+      - key: KALSHI_PRIVATE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PGHOST
+        sync: false
+      - key: PGDATABASE
+        sync: false
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGSSLMODE
+        value: require
+    autoDeploy: true

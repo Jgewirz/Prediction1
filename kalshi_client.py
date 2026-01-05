@@ -2,6 +2,7 @@
 Simple Kalshi API Client with RSA authentication
 """
 
+import asyncio
 import hashlib
 import json
 import time
@@ -394,29 +395,56 @@ class KalshiClient:
             return False  # If we can't check, assume no position to be safe
 
     async def place_order(self, ticker: str, side: str, amount: float) -> Dict[str, Any]:
-        """Place a simple market order."""
+        """Place a limit order at current market price."""
         try:
             # Generate a unique client order ID
             import uuid
             client_order_id = str(uuid.uuid4())
-            
-            # Convert dollar amount to cents for buy_max_cost
-            buy_max_cost_cents = int(amount * 100)
-            
-            # For market orders, we want to spend up to our dollar amount
-            # Set a high count but limit with buy_max_cost to control actual spending
-            max_contracts = 1000  # High number to ensure we can buy up to our budget
-            
+
+            # First, get the current market price
+            headers = await self._get_headers("GET", f"/trade-api/v2/markets/{ticker}")
+            market_response = await self.client.get(f"/trade-api/v2/markets/{ticker}", headers=headers)
+            market_response.raise_for_status()
+            market_data = market_response.json().get("market", {})
+
+            # Get the ask price for the side we want to buy
+            # yes_ask and no_ask are in cents (0-100)
+            if side.lower() == "yes":
+                price_cents = market_data.get("yes_ask", 50)
+            else:
+                price_cents = market_data.get("no_ask", 50)
+
+            if price_cents is None or price_cents == 0:
+                logger.error(f"No ask price available for {ticker} {side}")
+                return {"success": False, "error": "No ask price available"}
+
+            # Calculate how many contracts we can buy with our budget
+            # Each contract costs price_cents cents, and pays out 100 cents if we win
+            amount_cents = int(amount * 100)
+            num_contracts = amount_cents // price_cents
+
+            if num_contracts < 1:
+                logger.error(f"Amount ${amount} too small for price {price_cents} cents")
+                return {"success": False, "error": "Amount too small for current price"}
+
+            # Kalshi API requires one of: yes_price, no_price (in cents 1-99)
             order_data = {
                 "ticker": ticker,
-                "side": side,  # "yes" or "no"
+                "side": side.lower(),  # "yes" or "no"
                 "action": "buy",
-                "type": "market",
+                "type": "limit",
                 "client_order_id": client_order_id,
-                "count": max_contracts,  # High count to allow buying up to budget
-                "buy_max_cost": buy_max_cost_cents  # Actual spending limit in cents
+                "count": num_contracts,
             }
-            
+
+            # Add the correct price field based on side
+            if side.lower() == "yes":
+                order_data["yes_price"] = price_cents
+            else:
+                order_data["no_price"] = price_cents
+
+            logger.info(f"Placing order: {ticker} {side} {num_contracts} contracts @ {price_cents}c (${amount:.2f} budget)")
+
             headers = await self._get_headers("POST", "/trade-api/v2/portfolio/orders")
             response = await self.client.post(
                 "/trade-api/v2/portfolio/orders",
@@ -424,15 +452,279 @@ class KalshiClient:
                 json=order_data
             )
             response.raise_for_status()
-            
+
             result = response.json()
-            logger.info(f"Order placed: {ticker} {side} ${amount} (max cost: {buy_max_cost_cents} cents)")
-            return {"success": True, "order_id": result.get("order_id", ""), "client_order_id": client_order_id}
-            
+            logger.info(f"Order placed successfully: {ticker} {side} {num_contracts} @ {price_cents}c")
+            return {"success": True, "order_id": result.get("order", {}).get("order_id", ""), "client_order_id": client_order_id, "contracts": num_contracts, "price": price_cents}
+
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             return {"success": False, "error": str(e)}
-    
+
+    async def sell_position(
+        self,
+        ticker: str,
+        side: str,
+        contracts: int,
+        price_cents: Optional[int] = None,
+        order_type: str = "limit"
+    ) -> Dict[str, Any]:
+        """
+        Sell (close) a position.
+
+        Args:
+            ticker: Market ticker
+            side: "yes" or "no" - which side to sell
+            contracts: Number of contracts to sell
+            price_cents: Limit price in cents (None = use current bid)
+            order_type: "limit" or "market"
+
+        Returns:
+            {"success": bool, "order_id": str, "contracts": int, "price_cents": int, ...}
+        """
+        try:
+            import uuid
+            client_order_id = str(uuid.uuid4())
+
+            # Get current market price if not specified
+            if price_cents is None:
+                market_data = await self.get_market_with_odds(ticker)
+                # Sell at bid price (what buyers are willing to pay)
+                if side.lower() == "yes":
+                    price_cents = market_data.get("yes_bid", 50)
+                else:
+                    price_cents = market_data.get("no_bid", 50)
+
+            if price_cents is None or price_cents == 0:
+                logger.error(f"No bid price available for {ticker} {side}")
+                return {"success": False, "error": "No bid price available"}
+
+            order_data = {
+                "ticker": ticker,
+                "side": side.lower(),
+                "action": "sell",  # KEY DIFFERENCE: sell instead of buy
+                "type": order_type,
+                "client_order_id": client_order_id,
+                "count": contracts,
+            }
+
+            # Add price for limit orders
+            if order_type == "limit":
+                if side.lower() == "yes":
+                    order_data["yes_price"] = price_cents
+                else:
+                    order_data["no_price"] = price_cents
+
+            logger.info(f"Selling position: {ticker} {side} {contracts} contracts @ {price_cents}c")
+
+            headers = await self._get_headers("POST", "/trade-api/v2/portfolio/orders")
+            response = await self.client.post(
+                "/trade-api/v2/portfolio/orders",
+                headers=headers,
+                json=order_data
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            order = result.get("order", {})
+
+            logger.info(f"Sell order placed: {order.get('order_id')} - {contracts} {side} @ {price_cents}c")
+
+            return {
+                "success": True,
+                "order_id": order.get("order_id", ""),
+                "client_order_id": client_order_id,
+                "contracts": contracts,
+                "price_cents": price_cents,
+                "status": order.get("status", ""),
+            }
+
+        except Exception as e:
+            logger.error(f"Error selling position: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def liquidate_position(self, ticker: str) -> Dict[str, Any]:
+        """
+        Fully liquidate a position at market.
+
+        Gets current position and sells all contracts.
+
+        Args:
+            ticker: Market ticker to liquidate
+
+        Returns:
+            {"success": bool, "order_id": str, "contracts": int, "side": str, ...}
+        """
+        try:
+            # Get current position
+            positions = await self.get_user_positions()
+
+            position = None
+            for p in positions:
+                if p.get("ticker") == ticker:
+                    position = p
+                    break
+
+            if not position:
+                return {"success": False, "error": f"No position found for {ticker}"}
+
+            position_size = position.get("position", 0)
+
+            if position_size == 0:
+                return {"success": True, "message": "No position to liquidate", "contracts": 0}
+
+            # Determine side based on position sign
+            # Positive = YES contracts, Negative = NO contracts
+            if position_size > 0:
+                side = "yes"
+                contracts = position_size
+            else:
+                side = "no"
+                contracts = abs(position_size)
+
+            logger.info(f"Liquidating {ticker}: {contracts} {side.upper()} contracts")
+
+            result = await self.sell_position(ticker, side, contracts)
+            result["side"] = side
+            result["original_position"] = position_size
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error liquidating position {ticker}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def liquidate_all_positions(self) -> Dict[str, Any]:
+        """
+        Emergency: Liquidate ALL open positions.
+
+        Returns summary of liquidation attempts.
+
+        Returns:
+            {
+                "success": bool,
+                "liquidated": [{"ticker": str, "contracts": int, "order_id": str}, ...],
+                "failed": [{"ticker": str, "error": str}, ...],
+                "total_positions": int
+            }
+        """
+        results = {
+            "success": True,
+            "liquidated": [],
+            "failed": [],
+            "total_positions": 0
+        }
+
+        try:
+            positions = await self.get_user_positions()
+            results["total_positions"] = len(positions)
+
+            logger.warning(f"EMERGENCY LIQUIDATION: Processing {len(positions)} positions")
+
+            for position in positions:
+                ticker = position.get("ticker")
+                position_size = position.get("position", 0)
+
+                if position_size == 0:
+                    continue
+
+                result = await self.liquidate_position(ticker)
+
+                if result.get("success"):
+                    results["liquidated"].append({
+                        "ticker": ticker,
+                        "contracts": abs(position_size),
+                        "side": "yes" if position_size > 0 else "no",
+                        "order_id": result.get("order_id")
+                    })
+                else:
+                    results["failed"].append({
+                        "ticker": ticker,
+                        "error": result.get("error")
+                    })
+                    results["success"] = False
+
+            logger.info(
+                f"Liquidation complete: {len(results['liquidated'])} succeeded, "
+                f"{len(results['failed'])} failed"
+            )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error in mass liquidation: {e}")
+            return {"success": False, "error": str(e), "liquidated": [], "failed": []}
+
+    async def get_order_status(self, order_id: str) -> Dict[str, Any]:
+        """
+        Get status of a specific order.
+
+        Args:
+            order_id: Kalshi order ID
+
+        Returns:
+            Order details including status, fill info, etc.
+        """
+        try:
+            headers = await self._get_headers("GET", f"/trade-api/v2/portfolio/orders/{order_id}")
+            response = await self.client.get(
+                f"/trade-api/v2/portfolio/orders/{order_id}",
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json().get("order", {})
+        except Exception as e:
+            logger.error(f"Error getting order status for {order_id}: {e}")
+            return {"error": str(e)}
+
+    async def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        """
+        Cancel an open order.
+
+        Args:
+            order_id: Kalshi order ID to cancel
+
+        Returns:
+            {"success": bool, "order_id": str, ...}
+        """
+        try:
+            headers = await self._get_headers("DELETE", f"/trade-api/v2/portfolio/orders/{order_id}")
+            response = await self.client.delete(
+                f"/trade-api/v2/portfolio/orders/{order_id}",
+                headers=headers
+            )
+            response.raise_for_status()
+            logger.info(f"Order {order_id} cancelled successfully")
+            return {"success": True, "order_id": order_id}
+        except Exception as e:
+            logger.error(f"Error cancelling order {order_id}: {e}")
+            return {"success": False, "order_id": order_id, "error": str(e)}
+
+    async def get_user_fills(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get recent order fills for the user.
+
+        Args:
+            limit: Maximum number of fills to return
+
+        Returns:
+            List of fill records with order details and settlement amounts
+        """
+        try:
+            path = "/trade-api/v2/portfolio/fills"
+            headers = await self._get_headers("GET", path)
+            response = await self.client.get(
+                path,
+                headers=headers,
+                params={"limit": limit}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("fills", [])
+        except Exception as e:
+            logger.error(f"Error getting user fills: {e}")
+            return []
+
     async def _get_headers(self, method: str, path: str) -> Dict[str, str]:
         """Generate headers with RSA signature."""
         timestamp = str(int(time.time() * 1000))
@@ -477,6 +769,135 @@ class KalshiClient:
             logger.error(f"Error signing message: {e}")
             raise
     
+    async def get_market_status(self, ticker: str) -> Dict[str, Any]:
+        """
+        Get current market status including settlement info.
+
+        Returns:
+            Dict with: ticker, status, result (if settled), settlement_value, close_time
+        """
+        try:
+            headers = await self._get_headers("GET", f"/trade-api/v2/markets/{ticker}")
+            response = await self.client.get(
+                f"/trade-api/v2/markets/{ticker}",
+                headers=headers
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            market = data.get("market", {})
+
+            return {
+                "ticker": market.get("ticker", ""),
+                "title": market.get("title", ""),
+                "status": market.get("status", ""),  # open, closed, settled
+                "result": market.get("result", ""),  # yes, no (only for settled)
+                "settlement_value": market.get("settlement_value"),
+                "close_time": market.get("close_time", ""),
+                "expiration_time": market.get("expiration_time", ""),
+                "yes_bid": market.get("yes_bid"),
+                "yes_ask": market.get("yes_ask"),
+                "no_bid": market.get("no_bid"),
+                "no_ask": market.get("no_ask"),
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting market status for {ticker}: {e}")
+            return {}
+
+    async def get_settled_markets(self, tickers: List[str]) -> List[Dict[str, Any]]:
+        """
+        Batch fetch settlement status for multiple markets.
+
+        Args:
+            tickers: List of market tickers to check
+
+        Returns:
+            List of settled market info dicts
+        """
+        settled_markets = []
+        batch_size = 20
+
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i + batch_size]
+            tasks = [self.get_market_status(ticker) for ticker in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, dict) and result.get("status") == "settled":
+                    settled_markets.append(result)
+
+            # Small delay between batches
+            if i + batch_size < len(tickers):
+                await asyncio.sleep(0.2)
+
+        logger.info(f"Found {len(settled_markets)} settled markets out of {len(tickers)} checked")
+        return settled_markets
+
+    async def get_user_fills(self, since: Optional[datetime] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get order fills/settlements for P&L calculation.
+
+        Args:
+            since: Only return fills after this timestamp
+            limit: Maximum number of fills to return
+
+        Returns:
+            List of fill records with order details and settlement info
+        """
+        try:
+            headers = await self._get_headers("GET", "/trade-api/v2/portfolio/fills")
+            params = {"limit": limit}
+
+            if since:
+                # Convert to ISO format
+                params["min_ts"] = int(since.timestamp())
+
+            response = await self.client.get(
+                "/trade-api/v2/portfolio/fills",
+                headers=headers,
+                params=params
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            fills = data.get("fills", [])
+
+            logger.info(f"Retrieved {len(fills)} fills from Kalshi API")
+            return fills
+
+        except Exception as e:
+            logger.error(f"Error getting user fills: {e}")
+            return []
+
+    async def get_portfolio_settlements(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get settled positions from portfolio.
+
+        Returns:
+            List of settled position records
+        """
+        try:
+            headers = await self._get_headers("GET", "/trade-api/v2/portfolio/settlements")
+            params = {"limit": limit}
+
+            response = await self.client.get(
+                "/trade-api/v2/portfolio/settlements",
+                headers=headers,
+                params=params
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            settlements = data.get("settlements", [])
+
+            logger.info(f"Retrieved {len(settlements)} settlements from Kalshi API")
+            return settlements
+
+        except Exception as e:
+            logger.error(f"Error getting portfolio settlements: {e}")
+            return []
+
     async def close(self):
         """Close the HTTP client."""
         if self.client:

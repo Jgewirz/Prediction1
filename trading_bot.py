@@ -5,16 +5,12 @@ import asyncio
 import argparse
 import json
 import csv
-import json
-import csv
-import datetime
 import math
-from pathlib import Path
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import time
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -25,7 +21,17 @@ from kalshi_client import KalshiClient
 from research_client import OctagonClient
 from betting_models import BettingDecision, MarketAnalysis, ProbabilityExtraction
 from config import load_config
+from trendradar_client import TrendRadarClient, TrendingSignal, SignalConfig, calculate_signal_influence, format_signals_for_research
+from db import get_database, Database, get_postgres_database, PostgresDatabase
+from db.database import close_database
+from db.postgres import close_postgres_database
+from db.queries import Queries
 import openai
+import uuid
+
+# Type alias for database (can be SQLite or PostgreSQL)
+from typing import Union
+DatabaseType = Union[Database, PostgresDatabase]
 
 
 class SimpleTradingBot:
@@ -39,6 +45,10 @@ class SimpleTradingBot:
         self.kalshi_client = None
         self.research_client = None
         self.openai_client = None
+        self.trendradar_client: Optional[TrendRadarClient] = None
+        self.event_signals: Dict[str, List[TrendingSignal]] = {}  # Cache signals per event
+        self.db: Optional[Database] = None
+        self.run_id: str = str(uuid.uuid4())
         self.max_close_ts = max_close_ts
         
     async def initialize(self):
@@ -52,15 +62,83 @@ class SimpleTradingBot:
             self.config.max_markets_per_event,
             max_close_ts=self.max_close_ts,
         )
-        self.research_client = OctagonClient(self.config.octagon)
+        self.research_client = OctagonClient(self.config.octagon, self.config.openai)
         self.openai_client = openai.AsyncOpenAI(api_key=self.config.openai.api_key)
-        
+
+        # Initialize database if enabled
+        if self.config.database.enable_db:
+            try:
+                db_type = self.config.database.db_type.lower()
+
+                if db_type == "postgres":
+                    # Use PostgreSQL (Neon)
+                    self.db = await get_postgres_database(
+                        host=self.config.database.pg_host,
+                        database=self.config.database.pg_database,
+                        user=self.config.database.pg_user,
+                        password=self.config.database.pg_password,
+                        port=self.config.database.pg_port,
+                        ssl=self.config.database.pg_ssl
+                    )
+                    self.console.print("[green][OK] PostgreSQL database connected (Neon)[/green]")
+                else:
+                    # Use SQLite
+                    self.db = await get_database(self.config.database.db_path)
+                    self.console.print("[green][OK] SQLite database connected[/green]")
+
+                # Record run start
+                await self.db.start_run(self.run_id, {
+                    'mode': 'dry_run' if self.config.dry_run else 'live',
+                    'environment': 'demo' if self.config.kalshi.use_demo else 'production',
+                    'max_events': self.config.max_events_to_analyze,
+                    'z_threshold': self.config.z_threshold,
+                    'kelly_fraction': self.config.kelly_fraction
+                })
+            except Exception as e:
+                logger.warning(f"Failed to initialize database: {e}")
+                self.db = None
+
         # Test connections
         await self.kalshi_client.login()
-        self.console.print("[green]✓ Kalshi API connected[/green]")
-        self.console.print("[green]✓ Octagon API ready[/green]")
-        self.console.print("[green]✓ OpenAI API ready[/green]")
-        
+        self.console.print("[green][OK] Kalshi API connected[/green]")
+        self.console.print("[green][OK] Research API ready (GPT-4o)[/green]")
+        self.console.print("[green][OK] OpenAI API ready[/green]")
+
+        # Initialize TrendRadar client if enabled
+        if self.config.trendradar.enabled:
+            self.trendradar_client = TrendRadarClient(
+                base_url=self.config.trendradar.base_url,
+                timeout=self.config.trendradar.timeout,
+                enabled=True,
+                cache_ttl=getattr(self.config.trendradar, 'cache_ttl_seconds', 300.0),
+                max_retries=self.config.trendradar.max_retries,
+                retry_backoff_base=self.config.trendradar.retry_backoff_base,
+                circuit_failure_threshold=self.config.trendradar.circuit_failure_threshold,
+                circuit_reset_seconds=self.config.trendradar.circuit_reset_seconds
+            )
+            # Test connection
+            if await self.trendradar_client.health_check():
+                logger.info(
+                    f"TrendRadar connected | "
+                    f"url={self.config.trendradar.base_url} | "
+                    f"timeout={self.config.trendradar.timeout}s | "
+                    f"max_retries={self.config.trendradar.max_retries} | "
+                    f"circuit_threshold={self.config.trendradar.circuit_failure_threshold}"
+                )
+                self.console.print("[green][OK] TrendRadar connected (Western Financial News)[/green]")
+            else:
+                logger.warning(
+                    f"TrendRadar health check FAILED | "
+                    f"url={self.config.trendradar.base_url} | "
+                    f"action=disabling_integration | "
+                    f"impact=trading_without_news_signals"
+                )
+                self.console.print("[yellow][!] TrendRadar not reachable - continuing without news signals[/yellow]")
+                self.trendradar_client.enabled = False
+        else:
+            logger.info("TrendRadar integration disabled via config (TRENDRADAR_ENABLED=false)")
+            self.console.print("[blue]TrendRadar integration disabled[/blue]")
+
         # Show environment info
         env_color = "green" if self.config.kalshi.use_demo else "yellow"
         env_name = "DEMO" if self.config.kalshi.use_demo else "PRODUCTION"
@@ -86,7 +164,56 @@ class SimpleTradingBot:
             hours_from_now = (self.max_close_ts - int(time.time())) / 3600
             # Show one decimal hour precision
             self.console.print(f"[blue]Market expiration filter: close before ~{hours_from_now:.1f} hours from now[/blue]")
-    
+
+    async def check_kill_switch(self) -> bool:
+        """
+        Check if daily loss limit has been hit.
+
+        Returns:
+            True if kill switch is triggered (trading should stop), False otherwise.
+        """
+        if not self.config.enable_kill_switch:
+            return False
+
+        if not self.db:
+            logger.warning("Kill switch check skipped: database not available")
+            return False
+
+        try:
+            # Query today's P&L from database
+            row = await self.db.fetchone(Queries.GET_TODAY_PNL)
+            if row:
+                raw_pnl = row.get('daily_pnl', 0.0) if isinstance(row, dict) else (row[0] if row[0] is not None else 0.0)
+                daily_pnl = float(raw_pnl) if raw_pnl is not None else 0.0
+
+                # Check if we've exceeded the daily loss limit
+                if daily_pnl < -self.config.max_daily_loss:
+                    logger.warning(
+                        f"Kill switch triggered: daily loss ${abs(daily_pnl):.2f} "
+                        f"exceeds limit ${self.config.max_daily_loss:.2f}"
+                    )
+                    return True
+
+                # Also check percentage-based limit
+                pct_loss = abs(daily_pnl) / self.config.bankroll if self.config.bankroll > 0 else 0
+                if daily_pnl < 0 and pct_loss > self.config.max_daily_loss_pct:
+                    logger.warning(
+                        f"Kill switch triggered: daily loss {pct_loss:.1%} "
+                        f"exceeds limit {self.config.max_daily_loss_pct:.1%}"
+                    )
+                    return True
+
+                # Log current status
+                if daily_pnl != 0:
+                    logger.info(f"Daily P&L: ${daily_pnl:.2f} (limit: ${self.config.max_daily_loss:.2f})")
+
+        except Exception as e:
+            logger.error(f"Failed to check kill switch: {e}")
+            # Don't block trading on kill switch check failure
+            return False
+
+        return False
+
     def calculate_risk_adjusted_metrics(self, research_prob: float, market_price: float, action: str) -> dict:
         """
         Calculate hedge-fund style risk-adjusted metrics.
@@ -174,7 +301,74 @@ class SimpleTradingBot:
         kelly_bet_size = max(kelly_bet_size, 1.0)
         
         return kelly_bet_size
-    
+
+    def calculate_dynamic_kelly(self, base_kelly: float, r_score: float, confidence: float) -> float:
+        """
+        Calculate Kelly fraction dynamically based on bet quality (R-score and confidence).
+
+        Higher R-scores and confidence warrant closer-to-full Kelly sizing.
+        Lower quality bets use more conservative sizing.
+
+        Args:
+            base_kelly: Base Kelly fraction from probability edge
+            r_score: Risk-adjusted edge score (z-score)
+            confidence: Model's confidence in the probability estimate (0-1)
+
+        Returns:
+            Quality-adjusted Kelly fraction
+        """
+        # R-score multiplier: scale from 0.5 (at threshold) to 1.0 (at R-score 3.0+)
+        # At R-score 0.8 (threshold), use 0.5x multiplier
+        # At R-score 3.0+, use full 1.0x multiplier
+        r_score_normalized = min(max((r_score - self.config.z_threshold) / 2.2, 0), 1)
+        r_score_multiplier = 0.5 + (r_score_normalized * 0.5)  # 0.5 to 1.0
+
+        # Confidence multiplier: square to penalize low confidence more severely
+        confidence_multiplier = confidence ** 2
+        confidence_multiplier = max(confidence_multiplier, 0.25)  # Floor at 0.25
+
+        # Combined quality multiplier
+        quality_multiplier = r_score_multiplier * confidence_multiplier
+
+        # Apply to base Kelly
+        adjusted_kelly = base_kelly * quality_multiplier * self.config.kelly_fraction
+
+        return adjusted_kelly
+
+    def calculate_quality_adjusted_position_size(self, kelly_fraction: float, r_score: float,
+                                                  confidence: float) -> float:
+        """
+        Calculate position size using dynamic Kelly based on bet quality.
+
+        Args:
+            kelly_fraction: Raw Kelly fraction from edge calculation
+            r_score: Risk-adjusted edge score
+            confidence: Model confidence in probability estimate
+
+        Returns:
+            Position size in dollars
+        """
+        if not self.config.enable_kelly_sizing or kelly_fraction <= 0:
+            return self.config.max_bet_amount
+
+        # Apply dynamic Kelly adjustment based on quality
+        adjusted_kelly = self.calculate_dynamic_kelly(kelly_fraction, r_score, confidence)
+
+        # Calculate position size as fraction of bankroll
+        kelly_bet_size = self.config.bankroll * adjusted_kelly
+
+        # Apply maximum bet fraction constraint
+        max_allowed = self.config.bankroll * self.config.max_kelly_bet_fraction
+        kelly_bet_size = min(kelly_bet_size, max_allowed)
+
+        # Apply absolute maximum bet limit
+        kelly_bet_size = min(kelly_bet_size, self.config.max_bet_amount)
+
+        # Ensure minimum bet size
+        kelly_bet_size = max(kelly_bet_size, 1.0)
+
+        return kelly_bet_size
+
     def apply_portfolio_selection(self, analysis: MarketAnalysis, event_ticker: str) -> MarketAnalysis:
         """
         Apply portfolio selection to hold only the N highest R-scores.
@@ -229,9 +423,27 @@ class SimpleTradingBot:
             # Future enhancement: could implement diversification by event category, etc.
             # For now, fall back to top R-scores
             return self.apply_portfolio_selection(analysis, event_ticker)
-        
+
         return analysis
-    
+
+    def _parse_datetime(self, value: Optional[str]) -> Optional[datetime]:
+        """Parse a datetime string to timezone-naive datetime for PostgreSQL."""
+        if not value:
+            return None
+        try:
+            # Handle ISO format with Z suffix
+            if value.endswith('Z'):
+                value = value[:-1] + '+00:00'
+            dt = datetime.fromisoformat(value)
+            # Convert to UTC and remove timezone for PostgreSQL compatibility
+            if dt.tzinfo is not None:
+                from datetime import timezone
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Failed to parse datetime '{value}': {e}")
+            return None
+
     async def get_top_events(self) -> List[Dict[str, Any]]:
         """Get top events sorted by 24-hour volume."""
         self.console.print("[bold]Step 1: Fetching top events...[/bold]")
@@ -251,7 +463,7 @@ class SimpleTradingBot:
                 events = await self.kalshi_client.get_events(limit=fetch_limit)
                 self.console.print(f"[blue]• Fetched {len(events)} events (will filter to top {self.config.max_events_to_analyze} after position filtering)[/blue]")
                 
-                self.console.print(f"[green]✓ Found {len(events)} events[/green]")
+                self.console.print(f"[green][OK] Found {len(events)} events[/green]")
                 
                 # Show top 10 events
                 table = Table(title="Top 10 Events by 24h Volume")
@@ -321,29 +533,29 @@ class SimpleTradingBot:
                 }
                 
                 if total_markets > len(markets):
-                    self.console.print(f"[green]✓ Using top {len(markets)} markets for {event_ticker} (from {total_markets} total)[/green]")
+                    self.console.print(f"[green][OK] Using top {len(markets)} markets for {event_ticker} (from {total_markets} total)[/green]")
                 else:
-                    self.console.print(f"[green]✓ Using {len(markets)} markets for {event_ticker}[/green]")
+                    self.console.print(f"[green][OK] Using {len(markets)} markets for {event_ticker}[/green]")
             else:
-                self.console.print(f"[yellow]⚠ No markets found for {event_ticker}[/yellow]")
+                self.console.print(f"[yellow][!] No markets found for {event_ticker}[/yellow]")
         
         total_markets = sum(len(data['markets']) for data in event_markets.values())
-        self.console.print(f"[green]✓ Processing {total_markets} total markets across {len(event_markets)} events[/green]")
+        self.console.print(f"[green][OK] Processing {total_markets} total markets across {len(event_markets)} events[/green]")
         return event_markets
     
     async def filter_markets_by_positions(self, event_markets: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Filter out markets where we already have positions to save research time."""
+        """Filter out individual markets where we already have positions (market-level, not event-level)."""
         if self.config.dry_run or not self.config.skip_existing_positions:
             # Skip position filtering in dry run mode or if disabled
             return event_markets
-            
-        self.console.print(f"\n[bold]Step 2.5: Filtering markets by existing positions...[/bold]")
-        
+
+        self.console.print(f"\n[bold]Step 2.5: Filtering individual markets by existing positions...[/bold]")
+
         filtered_event_markets = {}
         total_markets_before = 0
         total_markets_after = 0
         skipped_markets = 0
-        
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -352,69 +564,112 @@ class SimpleTradingBot:
             # Count total markets for progress
             total_markets = sum(len(data['markets']) for data in event_markets.values())
             task = progress.add_task("Checking existing positions...", total=total_markets)
-            
+
             for event_ticker, data in event_markets.items():
                 event = data['event']
                 markets = data['markets']
                 total_markets_before += len(markets)
-                
-                # Check if we have positions in ANY market of this event
-                event_has_positions = False
-                markets_checked = 0
-                
+
+                # Filter individual markets (not entire event)
+                filtered_markets = []
+
                 for market in markets:
                     ticker = market.get('ticker', '')
                     if not ticker:
                         progress.update(task, advance=1)
-                        markets_checked += 1
                         continue
-                        
+
                     try:
-                        # Check if we already have a position in this market
+                        # Check if we already have a position in THIS market
                         has_position = await self.kalshi_client.has_position_in_market(ticker)
                         if has_position:
-                            self.console.print(f"[yellow]⚠ Found position in {ticker}[/yellow]")
-                            event_has_positions = True
-                            # Update progress for remaining unchecked markets in this event
-                            remaining_markets = len(markets) - markets_checked - 1
-                            progress.update(task, advance=remaining_markets + 1)
-                            break  # No need to check other markets in this event
-                            
+                            self.console.print(f"[yellow][!] Skipping {ticker}: Has existing position[/yellow]")
+                            skipped_markets += 1
+                        else:
+                            # Keep this market
+                            filtered_markets.append(market)
+
                     except Exception as e:
                         logger.warning(f"Could not check position for {ticker}: {e}")
-                        # If we can't check, assume no position and continue checking other markets
-                    
+                        # If we can't check, assume no position and keep the market
+                        filtered_markets.append(market)
+
                     progress.update(task, advance=1)
-                    markets_checked += 1
-                
-                if event_has_positions:
-                    skipped_markets += len(markets)  # Count all markets in event as skipped
-                    self.console.print(f"[yellow]⚠ Skipping entire event {event_ticker}: Has existing positions[/yellow]")
-                else:
-                    # No positions found, keep the entire event
+
+                # Keep event if any markets remain after filtering
+                if filtered_markets:
                     filtered_event_markets[event_ticker] = {
                         'event': event,
-                        'markets': markets
+                        'markets': filtered_markets
                     }
-                    total_markets_after += len(markets)
-                    self.console.print(f"[green]✓ Keeping entire event {event_ticker}: No existing positions[/green]")
-        
+                    total_markets_after += len(filtered_markets)
+                    if len(filtered_markets) < len(markets):
+                        self.console.print(f"[blue]• Event {event_ticker}: Kept {len(filtered_markets)}/{len(markets)} markets[/blue]")
+                    else:
+                        self.console.print(f"[green][OK] Event {event_ticker}: All {len(markets)} markets available[/green]")
+                else:
+                    self.console.print(f"[yellow][!] Event {event_ticker}: All markets have positions, skipping[/yellow]")
+
         # Show filtering summary
-        events_skipped = len(event_markets) - len(filtered_event_markets)
-        self.console.print(f"\n[blue]Position filtering summary:[/blue]")
-        self.console.print(f"[blue]• Events before filtering: {len(event_markets)}[/blue]")
-        self.console.print(f"[blue]• Events after filtering: {len(filtered_event_markets)}[/blue]")
-        self.console.print(f"[blue]• Events skipped (existing positions): {events_skipped}[/blue]")
-        self.console.print(f"[blue]• Markets in skipped events: {skipped_markets}[/blue]")
+        events_with_some_markets = len(filtered_event_markets)
+        self.console.print(f"\n[blue]Position filtering summary (market-level):[/blue]")
+        self.console.print(f"[blue]• Total markets checked: {total_markets_before}[/blue]")
+        self.console.print(f"[blue]• Markets with positions (skipped): {skipped_markets}[/blue]")
         self.console.print(f"[blue]• Markets remaining for research: {total_markets_after}[/blue]")
-        
-        if len(filtered_event_markets) == 0:
-            self.console.print("[yellow]⚠ No events remaining after position filtering[/yellow]")
-        elif events_skipped > 0:
-            time_saved_estimate = events_skipped * 3  # Rough estimate: 3 minutes per event research
-            self.console.print(f"[green]✓ Estimated time saved by skipping research: ~{time_saved_estimate} minutes[/green]")
-            
+        self.console.print(f"[blue]• Events with available markets: {events_with_some_markets}[/blue]")
+
+        if events_with_some_markets == 0:
+            self.console.print("[yellow][!] No markets remaining after position filtering[/yellow]")
+
         return filtered_event_markets
+
+    async def fetch_trending_signals(self, event_markets: Dict[str, Dict[str, Any]]) -> Dict[str, List[TrendingSignal]]:
+        """Fetch trending signals for all events from TrendRadar (Step 3.25)."""
+        if not self.trendradar_client or not self.trendradar_client.enabled:
+            return {}
+
+        self.console.print(f"\n[bold]Step 3.25: Fetching trending signals for {len(event_markets)} events...[/bold]")
+
+        signals_by_event = {}
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task("Fetching news signals...", total=len(event_markets))
+
+            for event_ticker, data in event_markets.items():
+                event = data['event']
+                event_title = event.get('title', '')
+                event_category = event.get('category', '')
+
+                try:
+                    signals = await self.trendradar_client.get_signals_for_event(
+                        event_title=event_title,
+                        event_category=event_category
+                    )
+
+                    if signals:
+                        signals_by_event[event_ticker] = signals
+                        strong_count = sum(1 for s in signals if s.is_strong)
+                        self.console.print(
+                            f"[green][OK] {event_ticker}: {len(signals)} signals "
+                            f"({strong_count} strong)[/green]"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Error fetching signals for {event_ticker}: {e}")
+
+                progress.update(task, advance=1)
+
+        # Cache signals for use in decision making
+        self.event_signals = signals_by_event
+
+        total_signals = sum(len(s) for s in signals_by_event.values())
+        self.console.print(f"[green][OK] Fetched {total_signals} signals for {len(signals_by_event)} events[/green]")
+
+        return signals_by_event
 
     def _parse_probabilities_from_research(self, research_text: str, markets: List[Dict[str, Any]]) -> Dict[str, float]:
         """Parse probability predictions from Octagon research text."""
@@ -482,34 +737,42 @@ class SimpleTradingBot:
              
         return probabilities
 
-    async def research_events(self, event_markets: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    async def research_events(self, event_markets: Dict[str, Dict[str, Any]], signals_by_event: Dict[str, List[TrendingSignal]] = None) -> Dict[str, str]:
         """Research each event and its markets using Octagon Deep Research."""
         self.console.print(f"\n[bold]Step 3: Researching {len(event_markets)} events...[/bold]")
-        
+
+        if signals_by_event is None:
+            signals_by_event = {}
+
         research_results = {}
-        
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=self.console,
         ) as progress:
             task = progress.add_task("Researching events...", total=len(event_markets))
-            
+
             # Research events in batches to avoid rate limits
             batch_size = self.config.research_batch_size
             event_items = list(event_markets.items())
-            
+
             for i in range(0, len(event_items), batch_size):
                 batch = event_items[i:i + batch_size]
                 self.console.print(f"[blue]Processing research batch {i//batch_size + 1} with {len(batch)} events[/blue]")
-                
+
                 # Research batch in parallel with per-event timeout
                 tasks = []
                 for event_ticker, data in batch:
                     event = data['event']
                     markets = data['markets']
                     if event and markets:
-                        coro = self.research_client.research_event(event, markets)
+                        # Build trending context from signals if available
+                        trending_context = ""
+                        if event_ticker in signals_by_event:
+                            trending_context = format_signals_for_research(signals_by_event[event_ticker])
+
+                        coro = self.research_client.research_event(event, markets, trending_context)
                         # Apply per-event timeout to avoid hanging the whole batch
                         tasks.append(asyncio.wait_for(coro, timeout=self.config.research_timeout_seconds))
                     else:
@@ -522,12 +785,12 @@ class SimpleTradingBot:
                         if not isinstance(result, Exception) and result:
                             research_results[event_ticker] = result
                             progress.update(task, advance=1)
-                            self.console.print(f"[green]✓ Researched {event_ticker}[/green]")
+                            self.console.print(f"[green][OK] Researched {event_ticker}[/green]")
                         else:
                             err = result
                             if isinstance(result, asyncio.TimeoutError):
                                 err = f"Timeout after {self.config.research_timeout_seconds}s"
-                            self.console.print(f"[red]✗ Failed to research {event_ticker}: {err}[/red]")
+                            self.console.print(f"[red][X] Failed to research {event_ticker}: {err}[/red]")
                             progress.update(task, advance=1)
                 
                 except Exception as e:
@@ -538,7 +801,7 @@ class SimpleTradingBot:
                 # Brief pause between batches
                 await asyncio.sleep(1)
         
-        self.console.print(f"[green]✓ Completed research on {len(research_results)} events[/green]")
+        self.console.print(f"[green][OK] Completed research on {len(research_results)} events[/green]")
     
         
         return research_results
@@ -562,25 +825,34 @@ class SimpleTradingBot:
                     'no_mid_price': market.get('no_mid_price', 0)
                 })
             
-            # Create prompt for probability extraction
+            # Create prompt for probability extraction with anti-hallucination constraints
             prompt = f"""
             Based on the following deep research, extract the probability estimates for each market.
-            
+
             Event: {event_info.get('title', event_ticker)}
-            
+
             Markets:
             {json.dumps(market_info, indent=2)}
-            
+
             Research Results:
             {research_text}
-            
+
+            CRITICAL CONSTRAINTS - FOLLOW EXACTLY:
+            1. If research provides EXPLICIT probability estimates (percentages, odds), USE THOSE EXACT VALUES
+            2. If research provides ranges (e.g., "60-70%"), use the MIDPOINT
+            3. If research has NO quantitative probability data for a market, set confidence=0.2 (very low)
+            4. DO NOT invent or guess probabilities - only extract what the research explicitly supports
+            5. Include direct quotes or citations from the research to justify each probability
+            6. Higher confidence (0.7-1.0) ONLY if research has explicit numerical probability data
+            7. Medium confidence (0.4-0.6) if research has strong qualitative indicators but no numbers
+            8. Low confidence (0.2-0.3) if research is vague or lacks specific data for that market
+
             For each market, provide:
-            1. The research-based probability estimate (0-100%)
-            2. Clear reasoning for that probability
-            3. Confidence level in the estimate (0-1)
-            
+            1. research_probability: The probability (0-100%) - must be justified by research
+            2. reasoning: Must include direct evidence/quotes from the research
+            3. confidence: 0-1 based on quality of research data (see rules above)
+
             Focus on extracting concrete probability estimates from the research, not market prices.
-            If the research doesn't provide a clear probability for a market, make your best estimate based on the available information.
             """
             
             # Use Responses API structured outputs
@@ -593,8 +865,8 @@ class SimpleTradingBot:
                     {"role": "user", "content": prompt}
                 ],
                 response_format=ProbabilityExtraction,
-                reasoning_effort="low",
-                text_verbosity="medium",
+                reasoning_effort="high",
+                text_verbosity="high",
             )
 
             return event_ticker, extraction
@@ -636,18 +908,18 @@ class SimpleTradingBot:
                 event_ticker, extraction = result
                 if extraction is not None:
                     probability_extractions[event_ticker] = extraction
-                    self.console.print(f"[green]✓ Extracted probabilities for {event_ticker}[/green]")
+                    self.console.print(f"[green][OK] Extracted probabilities for {event_ticker}[/green]")
                     
                     # Display extracted probabilities
                     self.console.print(f"[blue]Extracted probabilities for {event_ticker}:[/blue]")
                     for market_prob in extraction.markets:
                         self.console.print(f"  {market_prob.ticker}: {market_prob.research_probability:.1f}%")
                 else:
-                    self.console.print(f"[red]✗ Failed to extract probabilities for {event_ticker}[/red]")
+                    self.console.print(f"[red][X] Failed to extract probabilities for {event_ticker}[/red]")
                 
                 progress.update(task, advance=1)
         
-        self.console.print(f"[green]✓ Extracted probabilities for {len(probability_extractions)} events[/green]")
+        self.console.print(f"[green][OK] Extracted probabilities for {len(probability_extractions)} events[/green]")
         return probability_extractions
     
     
@@ -692,7 +964,7 @@ class SimpleTradingBot:
                             market_odds[ticker] = result
                             progress.update(task, advance=1)
                         else:
-                            self.console.print(f"[red]✗ Failed to get odds for {ticker}[/red]")
+                            self.console.print(f"[red][X] Failed to get odds for {ticker}[/red]")
                             progress.update(task, advance=1)
                 
                 except Exception as e:
@@ -702,7 +974,7 @@ class SimpleTradingBot:
                 # Brief pause between batches
                 await asyncio.sleep(0.2)
         
-        self.console.print(f"[green]✓ Fetched odds for {len(market_odds)} markets[/green]")
+        self.console.print(f"[green][OK] Fetched odds for {len(market_odds)} markets[/green]")
         return market_odds
     
     async def _get_betting_decisions_for_event(self, event_ticker: str, data: Dict[str, Any], 
@@ -773,9 +1045,9 @@ class SimpleTradingBot:
                     high_confidence_bets += event_analysis.high_confidence_bets
                     event_summaries.append(f"{event_ticker}: {event_analysis.summary}")
                     
-                    self.console.print(f"[green]✓ Generated {len(event_analysis.decisions)} decisions for {event_ticker}[/green]")
+                    self.console.print(f"[green][OK] Generated {len(event_analysis.decisions)} decisions for {event_ticker}[/green]")
                 else:
-                    self.console.print(f"[red]✗ Failed to generate decisions for {event_ticker}[/red]")
+                    self.console.print(f"[red][X] Failed to generate decisions for {event_ticker}[/red]")
                 
                 progress.update(task, advance=1)
         
@@ -799,11 +1071,11 @@ class SimpleTradingBot:
         
         # Show overall decision summary
         actionable_decisions = [d for d in analysis.decisions if d.action != "skip"]
-        self.console.print(f"\n[green]✓ Generated {len(analysis.decisions)} total decisions ({len(actionable_decisions)} actionable)[/green]")
+        self.console.print(f"\n[green][OK] Generated {len(analysis.decisions)} total decisions ({len(actionable_decisions)} actionable)[/green]")
         
         # Display consolidated summary table
         if actionable_decisions:
-            table = Table(title="📊 All Betting Decisions Summary", show_lines=True)
+            table = Table(title="All Betting Decisions Summary", show_lines=True)
             table.add_column("Type", style="bright_blue", justify="center", width=8)
             table.add_column("Event", style="bright_blue", width=22)
             table.add_column("Market", style="cyan", width=32)
@@ -1160,8 +1432,8 @@ class SimpleTradingBot:
                     {"role": "user", "content": prompt}
                 ],
                 response_format=MarketAnalysis,
-                reasoning_effort="low",
-                text_verbosity="medium",
+                reasoning_effort="high",
+                text_verbosity="high",
             )
             
             # Enrich decisions with human-readable names
@@ -1311,21 +1583,101 @@ class SimpleTradingBot:
             risk_metrics = self.calculate_risk_adjusted_metrics(
                 research_prob, market_odds_data, decision.action
             )
-            
+
+            # Apply TrendRadar signal influence
+            signal_influence = {"confidence_boost": 0.0, "kelly_multiplier": 1.0, "should_override_skip": False, "reasoning": "", "signal_direction": None}
+            best_signal = None  # Track the best matching signal for persistence
+            if event_ticker in self.event_signals:
+                for signal in self.event_signals[event_ticker]:
+                    # Check if this signal matches the decision's market
+                    if signal.matches_event(decision.market_name or decision.ticker):
+                        signal_config = SignalConfig(
+                            max_confidence_boost=self.config.trendradar.max_confidence_boost,
+                            strong_signal_threshold=self.config.trendradar.strong_signal_threshold,
+                            min_source_count=self.config.trendradar.min_source_count,
+                            aligned_signal_kelly_multiplier=self.config.trendradar.aligned_signal_kelly_multiplier,
+                            enable_skip_override=self.config.trendradar.enable_skip_override,
+                            skip_override_min_strength=self.config.trendradar.skip_override_min_strength,
+                            skip_override_min_sources=self.config.trendradar.skip_override_min_sources
+                        )
+                        influence = calculate_signal_influence(
+                            signal, decision.action, decision.confidence, signal_config
+                        )
+                        # Take the strongest influence (highest absolute boost)
+                        if abs(influence["confidence_boost"]) > abs(signal_influence["confidence_boost"]):
+                            signal_influence = influence
+                            best_signal = signal  # Track the best signal for persistence
+
+            # Apply confidence boost from signals
+            original_confidence = decision.confidence
+            boosted_confidence = decision.confidence + signal_influence["confidence_boost"]
+            boosted_confidence = max(0.0, min(1.0, boosted_confidence))
+
+            # Structured logging for signal influence (for auditing)
+            if signal_influence["confidence_boost"] != 0:
+                logger.info(
+                    f"Signal influence applied | "
+                    f"ticker={decision.ticker} | "
+                    f"direction={signal_influence['signal_direction']} | "
+                    f"confidence_before={original_confidence:.3f} | "
+                    f"confidence_after={boosted_confidence:.3f} | "
+                    f"boost={signal_influence['confidence_boost']:+.3f} | "
+                    f"kelly_mult={signal_influence['kelly_multiplier']:.2f} | "
+                    f"override_skip={signal_influence['should_override_skip']}"
+                )
+
+            decision.confidence = boosted_confidence
+
+            # Attach TrendRadar signal data to decision for persistence
+            if best_signal is not None:
+                decision.signal_applied = True
+                decision.signal_direction = signal_influence.get("signal_direction")
+                decision.signal_topic = best_signal.topic
+                decision.signal_sentiment = best_signal.sentiment
+                decision.signal_strength = best_signal.strength
+                decision.signal_source_count = best_signal.source_count
+                decision.confidence_boost = signal_influence.get("confidence_boost", 0.0)
+                decision.kelly_multiplier = signal_influence.get("kelly_multiplier", 1.0)
+                decision.override_skip_triggered = signal_influence.get("should_override_skip", False)
+                decision.signal_reasoning = signal_influence.get("reasoning", "")
+
             # Apply threshold filtering - use R-score filtering by default
             should_accept = False
             rejection_reason = ""
-            
+
             # Use R-score (z-score) filtering - the new standard
             if risk_metrics["r_score"] >= self.config.z_threshold:
                 should_accept = True
+            elif signal_influence["should_override_skip"]:
+                # Strong signal can override skip decision
+                should_accept = True
+                logger.info(f"Signal override for {decision.ticker}: {signal_influence['reasoning']}")
             else:
                 rejection_reason = f"R-score {risk_metrics['r_score']:.2f} below z-threshold {self.config.z_threshold:.2f}"
-            
+
             if should_accept:
-                # Calculate Kelly position size if enabled
+                # Calculate quality-adjusted Kelly position size (uses R-score and confidence)
                 if self.config.enable_kelly_sizing:
-                    kelly_size = self.calculate_kelly_position_size(risk_metrics["kelly_fraction"])
+                    kelly_size = self.calculate_quality_adjusted_position_size(
+                        risk_metrics["kelly_fraction"],
+                        risk_metrics["r_score"],
+                        decision.confidence
+                    )
+                    # Apply signal Kelly multiplier
+                    kelly_before = kelly_size
+                    kelly_size *= signal_influence["kelly_multiplier"]
+                    kelly_size = min(kelly_size, self.config.max_bet_amount)
+
+                    # Log Kelly multiplier application (for auditing)
+                    if signal_influence["kelly_multiplier"] != 1.0:
+                        logger.info(
+                            f"Kelly multiplier applied | "
+                            f"ticker={decision.ticker} | "
+                            f"multiplier={signal_influence['kelly_multiplier']:.2f} | "
+                            f"kelly_before=${kelly_before:.2f} | "
+                            f"kelly_after=${kelly_size:.2f}"
+                        )
+
                     decision.amount = kelly_size
                 
                 # Enrich decision with risk metrics
@@ -1350,7 +1702,18 @@ class SimpleTradingBot:
                     r_score=risk_metrics["r_score"],
                     kelly_fraction=risk_metrics["kelly_fraction"],
                     market_price=market_odds_data,
-                    research_probability=research_prob
+                    research_probability=research_prob,
+                    # Copy TrendRadar signal data from original decision
+                    signal_applied=getattr(decision, 'signal_applied', False),
+                    signal_direction=getattr(decision, 'signal_direction', None),
+                    signal_topic=getattr(decision, 'signal_topic', None),
+                    signal_sentiment=getattr(decision, 'signal_sentiment', None),
+                    signal_strength=getattr(decision, 'signal_strength', None),
+                    signal_source_count=getattr(decision, 'signal_source_count', None),
+                    confidence_boost=getattr(decision, 'confidence_boost', 0.0),
+                    kelly_multiplier=getattr(decision, 'kelly_multiplier', 1.0),
+                    override_skip_triggered=getattr(decision, 'override_skip_triggered', False),
+                    signal_reasoning=getattr(decision, 'signal_reasoning', None)
                 )
                 validated_decisions.append(skip_decision)
                 logger.info(f"Filtered out {decision.ticker} - {rejection_reason}")
@@ -1438,14 +1801,14 @@ class SimpleTradingBot:
                 result = await self.kalshi_client.place_order(decision.ticker, side, decision.amount)
                 
                 if result.get("success"):
-                    self.console.print(f"[green]✓ Placed {decision.action} bet of ${decision.amount} on {decision.ticker}[/green]")
+                    self.console.print(f"[green][OK] Placed {decision.action} bet of ${decision.amount} on {decision.ticker}[/green]")
                 else:
-                    self.console.print(f"[red]✗ Failed to place bet on {decision.ticker}: {result.get('error', 'Unknown error')}[/red]")
+                    self.console.print(f"[red][X] Failed to place bet on {decision.ticker}: {result.get('error', 'Unknown error')}[/red]")
         
         if self.config.dry_run:
             self.console.print("\n[yellow]DRY RUN MODE: No actual bets were placed[/yellow]")
         else:
-            self.console.print(f"\n[green]✓ Completed bet placement[/green]")
+            self.console.print(f"\n[green][OK] Completed bet placement[/green]")
  
     def save_betting_decisions_to_csv(self, 
                                      analysis: MarketAnalysis, 
@@ -1695,18 +2058,171 @@ class SimpleTradingBot:
                 writer.writerows(csv_data)
             
             logger.info(f"Saved {len(csv_data)} betting decisions to {filepath}")
-            self.console.print(f"[bold green]✓[/bold green] Betting decisions saved to: [blue]{filepath}[/blue]")
+            self.console.print(f"[bold green][OK][/bold green] Betting decisions saved to: [blue]{filepath}[/blue]")
         else:
             logger.warning("No betting decisions to save")
             self.console.print("[yellow]No betting decisions to save[/yellow]")
         
         return str(filepath)
 
+    async def save_decisions_to_db(
+        self,
+        analysis: MarketAnalysis,
+        research_results: Dict[str, str],
+        probability_extractions: Dict[str, ProbabilityExtraction],
+        market_odds: Dict[str, Dict[str, Any]],
+        event_markets: Dict[str, Dict[str, Any]]
+    ) -> int:
+        """
+        Save betting decisions to SQLite database.
+
+        Args:
+            analysis: The final betting decisions
+            research_results: Raw research results by event ticker
+            probability_extractions: Structured probability data by event ticker
+            market_odds: Current market odds
+            event_markets: Event and market information
+
+        Returns:
+            int: Number of decisions saved
+        """
+        if not self.db:
+            logger.warning("Database not initialized, skipping DB save")
+            return 0
+
+        logger.info(f"Starting save_decisions_to_db with {len(analysis.decisions)} decisions")
+
+        decisions_to_save = []
+        timestamp_now = datetime.now()  # asyncpg requires datetime object, not string
+
+        for decision in analysis.decisions:
+            # Find corresponding event and research data
+            event_ticker = None
+            raw_research = ""
+            research_summary = ""
+            research_probability = None
+            research_reasoning = ""
+
+            # Find the event ticker for this market
+            for evt_ticker, data in event_markets.items():
+                for market in data['markets']:
+                    if market.get('ticker') == decision.ticker:
+                        event_ticker = evt_ticker
+                        break
+                if event_ticker:
+                    break
+
+            # Get raw research
+            if event_ticker and event_ticker in research_results:
+                raw_research = research_results[event_ticker]
+
+            # Get probability extraction data
+            if event_ticker and event_ticker in probability_extractions:
+                extraction = probability_extractions[event_ticker]
+                research_summary = extraction.overall_summary
+
+                for market_prob in extraction.markets:
+                    if market_prob.ticker == decision.ticker:
+                        research_probability = market_prob.research_probability
+                        research_reasoning = market_prob.reasoning
+                        break
+
+            # Get market odds
+            market_data = market_odds.get(decision.ticker, {})
+
+            # Generate unique decision ID (use ISO format for timestamp)
+            decision_id = f"{decision.ticker}_{timestamp_now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+            decision_record = {
+                'decision_id': decision_id,
+                'timestamp': timestamp_now,
+                'event_ticker': event_ticker or '',
+                'event_title': decision.event_name or '',
+                'market_ticker': decision.ticker,
+                'market_title': decision.market_name or '',
+                'action': decision.action,
+                'bet_amount': decision.amount,
+                'confidence': decision.confidence,
+                'reasoning': decision.reasoning,
+                'research_probability': research_probability,
+                'research_reasoning': research_reasoning,
+                'research_summary': research_summary,
+                'raw_research': raw_research[:10000] if raw_research else '',  # Truncate for DB
+                'market_yes_price': market_data.get('yes_ask'),
+                'market_no_price': market_data.get('no_ask'),
+                'market_yes_mid': (market_data.get('yes_bid', 0) + market_data.get('yes_ask', 0)) / 2 if market_data.get('yes_bid') and market_data.get('yes_ask') else None,
+                'market_no_mid': (market_data.get('no_bid', 0) + market_data.get('no_ask', 0)) / 2 if market_data.get('no_bid') and market_data.get('no_ask') else None,
+                'expected_return': decision.expected_return,
+                'r_score': decision.r_score,
+                'kelly_fraction': decision.kelly_fraction,
+                'calc_market_prob': decision.market_price,
+                'calc_research_prob': decision.research_probability,
+                'is_hedge': decision.is_hedge if decision.is_hedge else False,
+                'hedge_for': decision.hedge_for,
+                'market_yes_bid': market_data.get('yes_bid'),
+                'market_yes_ask': market_data.get('yes_ask'),
+                'market_no_bid': market_data.get('no_bid'),
+                'market_no_ask': market_data.get('no_ask'),
+                'market_volume': market_data.get('volume'),
+                'market_status': market_data.get('status'),
+                'market_close_time': self._parse_datetime(market_data.get('close_time')),
+                'status': 'pending' if decision.action != 'skip' else 'skipped',
+                # Run tracking
+                'run_mode': 'live' if not self.config.dry_run else 'dry_run',
+                'run_id': self.run_id,
+                # TrendRadar signal influence
+                'signal_applied': getattr(decision, 'signal_applied', False),
+                'signal_direction': getattr(decision, 'signal_direction', None),
+                'signal_topic': getattr(decision, 'signal_topic', None),
+                'signal_sentiment': getattr(decision, 'signal_sentiment', None),
+                'signal_strength': getattr(decision, 'signal_strength', None),
+                'signal_source_count': getattr(decision, 'signal_source_count', None),
+                'confidence_boost': getattr(decision, 'confidence_boost', 0.0),
+                'kelly_multiplier': getattr(decision, 'kelly_multiplier', 1.0),
+                'override_skip_triggered': getattr(decision, 'override_skip_triggered', False),
+                'signal_reasoning': getattr(decision, 'signal_reasoning', None)
+            }
+
+            decisions_to_save.append(decision_record)
+            logger.debug(f"Prepared decision record for {decision.ticker}")
+
+        logger.info(f"Prepared {len(decisions_to_save)} decision records for database")
+
+        # Batch insert all decisions
+        if decisions_to_save:
+            try:
+                count = await self.db.insert_decisions_batch(decisions_to_save)
+                logger.info(f"Saved {count} decisions to database")
+                self.console.print(f"[green][OK] Saved {count} decisions to SQLite database[/green]")
+                return count
+            except Exception as e:
+                logger.error(f"Failed to save decisions to database: {e}")
+                self.console.print(f"[red]Failed to save to database: {e}[/red]")
+                return 0
+
+        return 0
+
     async def run(self):
         """Main bot execution."""
         try:
             await self.initialize()
-            
+
+            # Check kill switch before trading
+            if await self.check_kill_switch():
+                self.console.print("[bold red]Kill switch active - daily loss limit exceeded. Trading halted.[/bold red]")
+                if self.db:
+                    await self.db.complete_run(
+                        run_id=self.run_id,
+                        events=0,
+                        markets=0,
+                        decisions=0,
+                        bets=0,
+                        wagered=0.0,
+                        status='halted',
+                        error='Kill switch triggered'
+                    )
+                return
+
             # Execute the main workflow
             events = await self.get_top_events()
             if not events:
@@ -1731,17 +2247,20 @@ class SimpleTradingBot:
                     event = data['event']
                     volume_24h = event.get('volume_24h', 0)
                     filtered_events_list.append((event_ticker, data, volume_24h))
-                
+
                 # Sort by volume_24h (descending) and take top max_events_to_analyze
                 filtered_events_list.sort(key=lambda x: x[2], reverse=True)
                 top_events = filtered_events_list[:self.config.max_events_to_analyze]
-                
+
                 # Rebuild event_markets dict with only top events
                 event_markets = {event_ticker: data for event_ticker, data, _ in top_events}
-                
-                self.console.print(f"[blue]• Limited to top {len(event_markets)} events by volume after position filtering[/blue]")
-            
-            research_results = await self.research_events(event_markets)
+
+                self.console.print(f"[blue]* Limited to top {len(event_markets)} events by volume after position filtering[/blue]")
+
+            # Step 3.25: Fetch trending signals from TrendRadar
+            signals_by_event = await self.fetch_trending_signals(event_markets)
+
+            research_results = await self.research_events(event_markets, signals_by_event)
             if not research_results:
                 self.console.print("[red]No research results. Exiting.[/red]")
                 return
@@ -1758,29 +2277,120 @@ class SimpleTradingBot:
             
             analysis = await self.get_betting_decisions(event_markets, probability_extractions, market_odds)
             
-            # Save betting decisions to CSV with research data
-            self.save_betting_decisions_to_csv(
+            # Save betting decisions to CSV with research data (if enabled)
+            if self.config.database.save_to_csv:
+                self.save_betting_decisions_to_csv(
+                    analysis=analysis,
+                    research_results=research_results,
+                    probability_extractions=probability_extractions,
+                    market_odds=market_odds,
+                    event_markets=event_markets
+                )
+
+            # Save betting decisions to SQLite database
+            decisions_saved = await self.save_decisions_to_db(
                 analysis=analysis,
                 research_results=research_results,
-                probability_extractions=probability_extractions, 
+                probability_extractions=probability_extractions,
                 market_odds=market_odds,
                 event_markets=event_markets
             )
-            
+
             await self.place_bets(analysis, market_odds, probability_extractions)
-            
+
+            # Record successful run completion
+            if self.db:
+                actionable = [d for d in analysis.decisions if d.action != 'skip']
+                await self.db.complete_run(
+                    run_id=self.run_id,
+                    events=len(event_markets),
+                    markets=sum(len(d['markets']) for d in event_markets.values()),
+                    decisions=len(analysis.decisions),
+                    bets=len(actionable),
+                    wagered=sum(d.amount for d in actionable),
+                    status='completed'
+                )
+
             self.console.print("\n[bold green]Bot execution completed![/bold green]")
-            
+
         except Exception as e:
             self.console.print(f"[red]Bot execution error: {e}[/red]")
             logger.exception("Bot execution failed")
-        
+
+            # Record failed run
+            if self.db:
+                await self.db.complete_run(
+                    run_id=self.run_id,
+                    events=0, markets=0, decisions=0, bets=0, wagered=0.0,
+                    status='failed',
+                    error=str(e)
+                )
+
         finally:
             # Clean up
             if self.research_client:
                 await self.research_client.close()
             if self.kalshi_client:
                 await self.kalshi_client.close()
+            # Note: Database connection is managed globally, don't close here
+
+
+async def run_migration():
+    """Run data migration from CSV and JSON to SQLite."""
+    from migrations import migrate_csv_files, migrate_calibration_json
+
+    config = load_config()
+    console = Console()
+
+    if not config.database.enable_db:
+        console.print("[red]Database is disabled. Enable it in config to run migration.[/red]")
+        return
+
+    try:
+        db = await get_database(config.database.db_path)
+
+        console.print("[bold blue]Starting data migration...[/bold blue]\n")
+
+        # Migrate CSV files
+        csv_summary = await migrate_csv_files(db, "betting_decisions", archive=False)
+
+        # Migrate calibration JSON
+        json_summary = await migrate_calibration_json(db, "calibration_data.json", backup=True)
+
+        console.print("\n[bold green]Migration complete![/bold green]")
+
+    except Exception as e:
+        console.print(f"[red]Migration failed: {e}[/red]")
+        logger.exception("Migration failed")
+
+
+async def show_statistics():
+    """Show performance statistics from the database."""
+    from reconciliation import ReconciliationEngine
+
+    config = load_config()
+    console = Console()
+
+    if not config.database.enable_db:
+        console.print("[red]Database is disabled. Enable it in config to use statistics.[/red]")
+        return
+
+    try:
+        db = await get_database(config.database.db_path)
+
+        # Create a dummy kalshi client (not needed for stats)
+        kalshi = KalshiClient(
+            config.kalshi,
+            config.minimum_time_remaining_hours,
+            config.max_markets_per_event
+        )
+
+        engine = ReconciliationEngine(db, kalshi)
+        await engine.print_performance_report()
+
+    except Exception as e:
+        console.print(f"[red]Error loading statistics: {e}[/red]")
+        logger.exception("Statistics failed")
 
 
 async def main(live_trading: bool = False, max_close_ts: Optional[int] = None):
@@ -1835,23 +2445,53 @@ Configuration:
         dest='max_expiration_hours',
         help='Only include markets that close within this many hours from now (minimum 1 hour).'
     )
-    
+
+    parser.add_argument(
+        '--reconcile',
+        action='store_true',
+        help='Run outcome reconciliation to update P&L for settled markets'
+    )
+
+    parser.add_argument(
+        '--stats',
+        action='store_true',
+        help='Show performance statistics from the database'
+    )
+
+    parser.add_argument(
+        '--migrate',
+        action='store_true',
+        help='Migrate existing CSV and JSON data to SQLite database'
+    )
+
     parser.add_argument(
         '--version',
         action='version',
         version='Kalshi Trading Bot 1.0.0'
     )
-    
+
     # Parse arguments
     args = parser.parse_args()
-    
+
     # Try to load config and run bot
     try:
-        max_close_ts = None
-        if args.max_expiration_hours is not None:
-            hours = max(1, args.max_expiration_hours)
-            max_close_ts = int(time.time()) + (hours * 3600)
-        asyncio.run(main(live_trading=args.live, max_close_ts=max_close_ts))
+        if args.reconcile:
+            # Run reconciliation mode
+            from reconciliation import run_reconciliation
+            asyncio.run(run_reconciliation())
+        elif args.stats:
+            # Show statistics mode
+            asyncio.run(show_statistics())
+        elif args.migrate:
+            # Run migration mode
+            asyncio.run(run_migration())
+        else:
+            # Normal trading mode
+            max_close_ts = None
+            if args.max_expiration_hours is not None:
+                hours = max(1, args.max_expiration_hours)
+                max_close_ts = int(time.time()) + (hours * 3600)
+            asyncio.run(main(live_trading=args.live, max_close_ts=max_close_ts))
     except Exception as e:
         console = Console()
         console.print(f"[red]Error: {e}[/red]")
