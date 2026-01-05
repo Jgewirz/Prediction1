@@ -324,15 +324,13 @@
     </div>
 
     <script>
-        // Auth State
-        let authToken = localStorage.getItem('authToken');
-        let currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+        // Auth State (disabled - public dashboard)
+        let authToken = null;
+        let currentUser = { name: 'Viewer' };
 
-        // Check auth on load
+        // Show dashboard directly on load (no auth required)
         document.addEventListener('DOMContentLoaded', function() {
-            if (authToken && currentUser) {
-                showDashboard();
-            }
+            showDashboard();
         });
 
         function showLogin() {
