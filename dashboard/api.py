@@ -383,6 +383,181 @@ async def startup():
     print("WebSocket heartbeat loop started")
 
 
+# === Learning Metrics ===
+
+@app.get("/api/learning/calibration")
+async def get_calibration_metrics() -> Dict[str, Any]:
+    """
+    Get calibration metrics showing predicted vs actual outcomes.
+    Used for learning from past events and improving predictions.
+    """
+    db = await get_db()
+
+    # Overall calibration summary
+    summary_query = """
+        SELECT
+            COUNT(*) as total_settled,
+            AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) as win_rate,
+            SUM(profit_loss) as total_pnl,
+            SUM(bet_amount) as total_wagered,
+            CASE WHEN SUM(bet_amount) > 0
+                THEN SUM(profit_loss) / SUM(bet_amount) * 100
+                ELSE 0
+            END as roi_pct,
+            AVG(
+                (calc_research_prob - CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END) *
+                (calc_research_prob - CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END)
+            ) as brier_score,
+            AVG(r_score) as avg_r_score,
+            AVG(confidence) as avg_confidence,
+            AVG(calc_research_prob) as avg_predicted_prob,
+            AVG(CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END) as avg_actual_outcome
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+    """
+    summary = await db.fetchone(summary_query)
+
+    # Calibration by probability bucket
+    bucket_query = """
+        SELECT
+            CASE
+                WHEN calc_research_prob < 0.2 THEN '0-20%'
+                WHEN calc_research_prob < 0.4 THEN '20-40%'
+                WHEN calc_research_prob < 0.6 THEN '40-60%'
+                WHEN calc_research_prob < 0.8 THEN '60-80%'
+                ELSE '80-100%'
+            END as prob_bucket,
+            COUNT(*) as count,
+            AVG(calc_research_prob) * 100 as avg_predicted,
+            AVG(CASE WHEN outcome = 'yes' THEN 100.0 ELSE 0.0 END) as avg_actual,
+            ABS(AVG(calc_research_prob) * 100 - AVG(CASE WHEN outcome = 'yes' THEN 100.0 ELSE 0.0 END)) as calibration_error
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+        GROUP BY prob_bucket
+        ORDER BY prob_bucket
+    """
+    buckets = await db.fetchall(bucket_query)
+
+    # R-score effectiveness
+    rscore_query = """
+        SELECT
+            CASE
+                WHEN r_score < 1.0 THEN 'low (<1.0)'
+                WHEN r_score < 1.5 THEN 'medium (1.0-1.5)'
+                WHEN r_score < 2.0 THEN 'good (1.5-2.0)'
+                ELSE 'high (>2.0)'
+            END as r_score_bucket,
+            COUNT(*) as count,
+            AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate,
+            SUM(profit_loss) as total_pnl,
+            AVG(profit_loss) as avg_pnl
+        FROM betting_decisions
+        WHERE status = 'settled' AND action != 'skip' AND r_score IS NOT NULL
+        GROUP BY r_score_bucket
+        ORDER BY r_score_bucket
+    """
+    rscore_metrics = await db.fetchall(rscore_query)
+
+    # Calculate overconfidence bias
+    overconfidence_bias = 0.0
+    if summary and summary.get("avg_predicted_prob") and summary.get("avg_actual_outcome"):
+        overconfidence_bias = (summary["avg_predicted_prob"] - summary["avg_actual_outcome"]) * 100
+
+    return {
+        "summary": {
+            "total_settled": summary["total_settled"] if summary else 0,
+            "win_rate": round(summary["win_rate"] * 100, 2) if summary and summary["win_rate"] else 0,
+            "total_pnl": round(summary["total_pnl"], 2) if summary and summary["total_pnl"] else 0,
+            "roi_pct": round(summary["roi_pct"], 2) if summary and summary["roi_pct"] else 0,
+            "brier_score": round(summary["brier_score"], 4) if summary and summary["brier_score"] else 0,
+            "avg_r_score": round(summary["avg_r_score"], 2) if summary and summary["avg_r_score"] else 0,
+            "overconfidence_bias": round(overconfidence_bias, 2)
+        },
+        "calibration_by_bucket": [
+            {
+                "bucket": b["prob_bucket"],
+                "count": b["count"],
+                "avg_predicted": round(b["avg_predicted"], 1),
+                "avg_actual": round(b["avg_actual"], 1),
+                "calibration_error": round(b["calibration_error"], 1)
+            }
+            for b in buckets
+        ] if buckets else [],
+        "rscore_effectiveness": [
+            {
+                "bucket": r["r_score_bucket"],
+                "count": r["count"],
+                "win_rate": round(r["win_rate"], 1),
+                "total_pnl": round(r["total_pnl"], 2) if r["total_pnl"] else 0,
+                "avg_pnl": round(r["avg_pnl"], 2) if r["avg_pnl"] else 0
+            }
+            for r in rscore_metrics
+        ] if rscore_metrics else [],
+        "recommendations": _generate_learning_recommendations(summary, buckets, overconfidence_bias)
+    }
+
+
+def _generate_learning_recommendations(summary, buckets, overconfidence_bias):
+    """Generate actionable recommendations based on calibration data."""
+    recommendations = []
+
+    if summary:
+        # Check for overconfidence
+        if overconfidence_bias > 5:
+            recommendations.append({
+                "type": "calibration",
+                "severity": "warning",
+                "message": f"System is overconfident by {overconfidence_bias:.1f}%. Consider reducing research probability estimates."
+            })
+        elif overconfidence_bias < -5:
+            recommendations.append({
+                "type": "calibration",
+                "severity": "info",
+                "message": f"System is underconfident by {abs(overconfidence_bias):.1f}%. Consider increasing research probability estimates."
+            })
+
+        # Check Brier score (lower is better, <0.25 is good)
+        brier = summary.get("brier_score", 0)
+        if brier and brier > 0.25:
+            recommendations.append({
+                "type": "accuracy",
+                "severity": "warning",
+                "message": f"Brier score ({brier:.3f}) indicates room for improvement. Target is <0.25."
+            })
+
+        # Check ROI
+        roi = summary.get("roi_pct", 0)
+        if roi and roi < 0:
+            recommendations.append({
+                "type": "profitability",
+                "severity": "critical",
+                "message": f"Negative ROI ({roi:.1f}%). Review position sizing and entry criteria."
+            })
+
+    # Check calibration by bucket
+    if buckets:
+        for bucket in buckets:
+            if bucket["calibration_error"] > 15:
+                recommendations.append({
+                    "type": "bucket_calibration",
+                    "severity": "warning",
+                    "message": f"Large calibration error ({bucket['calibration_error']:.1f}%) in {bucket['prob_bucket']} bucket."
+                })
+
+    if not recommendations:
+        recommendations.append({
+            "type": "status",
+            "severity": "success",
+            "message": "System is well-calibrated. Continue monitoring."
+        })
+
+    return recommendations
+
+
 # === Health Check ===
 
 @app.get("/api/health")

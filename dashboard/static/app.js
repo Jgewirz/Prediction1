@@ -625,7 +625,7 @@ async function showDecisionDetail(decisionId) {
             </div>
             <div class="detail-row">
                 <span class="detail-label">Research Prob:</span>
-                <span class="detail-value">${data.research_probability ? (data.research_probability).toFixed(1) + '%' : '--'}</span>
+                <span class="detail-value">${data.research_probability ? (data.research_probability * 100).toFixed(1) + '%' : '--'}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Market Prob:</span>

@@ -17,6 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from trading_bot import SimpleTradingBot
 from reconciliation import run_reconciliation
 from config import load_config
+from position_monitor import PositionMonitor, create_position_monitor
 
 
 class ContinuousTradingBot:
@@ -32,6 +33,7 @@ class ContinuousTradingBot:
         self.total_runs = 0
         self.successful_runs = 0
         self.last_run_time = None
+        self.position_monitor: PositionMonitor = None
 
         # Create logs directory if it doesn't exist
         Path("logs").mkdir(exist_ok=True)
@@ -50,6 +52,19 @@ class ContinuousTradingBot:
         try:
             bot = SimpleTradingBot(live_trading=self.live_trading)
             await bot.run()
+
+            # Initialize position monitor with bot's clients if not already done
+            if self.position_monitor is None and self.config.stop_loss.enabled and self.live_trading:
+                try:
+                    self.position_monitor = PositionMonitor(
+                        config=self.config,
+                        kalshi=bot.kalshi_client,
+                        db=bot.db
+                    )
+                    self.console.print("[green]Position monitor initialized[/green]")
+                    logger.info("Position monitor initialized successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize position monitor: {e}")
 
             self.consecutive_failures = 0
             self.successful_runs += 1
@@ -91,6 +106,28 @@ class ContinuousTradingBot:
         # Future: Check Kalshi API, TrendRadar, Database connectivity
         # For now, just log that we're alive
         pass
+
+    async def position_monitor_job(self):
+        """Check positions for stop-loss/take-profit triggers."""
+        if not self.config.stop_loss.enabled:
+            return
+
+        if self.position_monitor is None:
+            logger.debug("Position monitor not initialized, skipping check")
+            return
+
+        try:
+            triggers = await self.position_monitor.check_all_positions()
+            if triggers:
+                for trigger in triggers:
+                    self.console.print(
+                        f"[yellow]EXIT TRIGGERED: {trigger.trigger_type.value.upper()} "
+                        f"on {trigger.position.market_ticker} "
+                        f"P&L: ${trigger.position.unrealized_pnl_dollars:.2f}[/yellow]"
+                    )
+                    logger.info(f"Exit triggered: {trigger.to_dict()}")
+        except Exception as e:
+            logger.error(f"Position monitor check failed: {e}")
 
     def setup_signal_handlers(self):
         """Setup graceful shutdown handlers."""
@@ -161,6 +198,17 @@ class ContinuousTradingBot:
             id='health_check',
             name='Health Check'
         )
+
+        # Schedule position monitoring if enabled
+        if self.config.stop_loss.enabled:
+            self.scheduler.add_job(
+                self.position_monitor_job,
+                IntervalTrigger(seconds=self.config.stop_loss.monitor_interval_seconds),
+                id='position_monitor',
+                name='Position Monitor',
+                max_instances=1
+            )
+            self.console.print(f"Position monitoring interval: {self.config.stop_loss.monitor_interval_seconds} seconds")
 
         # Start scheduler
         self.scheduler.start()

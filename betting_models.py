@@ -33,10 +33,14 @@ class SkipReason(str, Enum):
 
 
 class MarketProbability(BaseModel):
-    """Structured probability data for a single market."""
+    """Structured probability data for a single market.
+
+    Note: research_probability is in 0-100 scale from LLM extraction,
+    but is converted to 0-1 scale when stored in BettingDecision for calculations.
+    """
     ticker: str = Field(..., description="The market ticker symbol")
     title: str = Field(..., description="Human-readable market title")
-    research_probability: float = Field(..., ge=0, le=100, description="Research predicted probability (0-100)")
+    research_probability: float = Field(..., ge=0, le=100, description="Research predicted probability (0-100 from LLM, converted to 0-1 for storage)")
     reasoning: str = Field(..., description="Brief reasoning for the probability estimate")
     confidence: float = Field(..., ge=0, le=1, description="Confidence in the probability estimate (0-1)")
 
@@ -68,8 +72,8 @@ class BettingDecision(BaseModel):
     expected_return: Optional[float] = Field(None, description="Expected return on capital E[R] = (p-y)/y")
     r_score: Optional[float] = Field(None, description="Risk-adjusted edge: (p-y)/sqrt(p*(1-p)) - the z-score")
     kelly_fraction: Optional[float] = Field(None, description="Optimal Kelly fraction for position sizing")
-    market_price: Optional[float] = Field(None, description="Market price used for calculations (0-1)")
-    research_probability: Optional[float] = Field(None, description="Research probability used for calculations (0-1)")
+    market_price: Optional[float] = Field(None, ge=0, le=1, description="Market price used for calculations (0-1 normalized)")
+    research_probability: Optional[float] = Field(None, ge=0, le=1, description="Research probability used for calculations (0-1 normalized)")
 
     # Run tracking
     run_mode: Optional[str] = Field(None, description="'dry_run' or 'live'")
