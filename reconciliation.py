@@ -13,9 +13,14 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from db import get_database, Database
+from db.postgres import get_postgres_database, PostgresDatabase
 from db.queries import Queries
 from kalshi_client import KalshiClient
 from config import load_config
+
+# Type alias for database (can be SQLite or PostgreSQL)
+from typing import Union
+DatabaseType = Union[Database, PostgresDatabase]
 
 
 class ReconciliationEngine:
@@ -351,8 +356,21 @@ async def run_reconciliation():
     console = Console()
 
     try:
-        # Initialize database
-        db = await get_database(config.database.db_path)
+        # Initialize database based on DB_TYPE configuration
+        db_type = config.database.db_type.lower()
+        if db_type == "postgres":
+            db = await get_postgres_database(
+                host=config.database.pg_host,
+                database=config.database.pg_database,
+                user=config.database.pg_user,
+                password=config.database.pg_password,
+                port=config.database.pg_port,
+                ssl=config.database.pg_ssl
+            )
+            console.print("[green][OK] PostgreSQL database connected (Neon)[/green]")
+        else:
+            db = await get_database(config.database.db_path)
+            console.print("[green][OK] SQLite database connected[/green]")
 
         # Initialize Kalshi client
         kalshi = KalshiClient(

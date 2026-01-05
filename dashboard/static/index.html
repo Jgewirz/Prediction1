@@ -6,169 +6,12 @@
     <title>Kalshi Trading Bot Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* Auth Modal Styles */
-        .auth-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(10, 14, 23, 0.95);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-        }
-        .auth-card {
-            background: #1a1f2e;
-            border: 1px solid #2d3548;
-            border-radius: 12px;
-            padding: 40px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-        }
-        .auth-title {
-            text-align: center;
-            font-size: 24px;
-            font-weight: 600;
-            color: #fff;
-            margin-bottom: 8px;
-        }
-        .auth-subtitle {
-            text-align: center;
-            color: #8b95a5;
-            margin-bottom: 32px;
-        }
-        .auth-form {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .auth-input {
-            width: 100%;
-            padding: 12px 16px;
-            background: #0d1117;
-            border: 1px solid #2d3548;
-            border-radius: 8px;
-            color: #fff;
-            font-size: 14px;
-        }
-        .auth-input:focus {
-            outline: none;
-            border-color: #6366f1;
-        }
-        .auth-input::placeholder {
-            color: #4a5568;
-        }
-        .auth-btn {
-            width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            border: none;
-            border-radius: 8px;
-            color: #fff;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        .auth-btn:hover {
-            opacity: 0.9;
-        }
-        .auth-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .auth-switch {
-            text-align: center;
-            margin-top: 16px;
-            color: #8b95a5;
-            font-size: 14px;
-        }
-        .auth-switch a {
-            color: #6366f1;
-            text-decoration: none;
-            cursor: pointer;
-        }
-        .auth-switch a:hover {
-            text-decoration: underline;
-        }
-        .auth-error {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #f87171;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 14px;
-            display: none;
-        }
-        .auth-error.visible {
-            display: block;
-        }
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .user-name {
-            color: #8b95a5;
-            font-size: 14px;
-        }
-        .logout-btn {
-            padding: 8px 16px;
-            background: transparent;
-            border: 1px solid #2d3548;
-            border-radius: 6px;
-            color: #8b95a5;
-            font-size: 13px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .logout-btn:hover {
-            background: #2d3548;
-            color: #fff;
-        }
-        .hidden {
-            display: none !important;
-        }
+        
     </style>
 </head>
 <body>
-    <!-- Auth Overlay -->
-    <div class="auth-overlay" id="auth-overlay">
-        <div class="auth-card">
-            <h1 class="auth-title">Kalshi Trading Bot</h1>
-            <p class="auth-subtitle" id="auth-subtitle">Sign in to access your dashboard</p>
-
-            <div class="auth-error" id="auth-error"></div>
-
-            <!-- Login Form -->
-            <form class="auth-form" id="login-form" onsubmit="handleLogin(event)">
-                <input type="email" class="auth-input" id="login-email" placeholder="Email" required>
-                <input type="password" class="auth-input" id="login-password" placeholder="Password" required>
-                <button type="submit" class="auth-btn" id="login-btn">Sign In</button>
-            </form>
-
-            <!-- Register Form -->
-            <form class="auth-form hidden" id="register-form" onsubmit="handleRegister(event)">
-                <input type="text" class="auth-input" id="register-name" placeholder="Full Name" required minlength="2">
-                <input type="email" class="auth-input" id="register-email" placeholder="Email" required>
-                <input type="password" class="auth-input" id="register-password" placeholder="Password (min 8 chars)" required minlength="8">
-                <button type="submit" class="auth-btn" id="register-btn">Create Account</button>
-            </form>
-
-            <p class="auth-switch" id="auth-switch-login">
-                Don't have an account? <a onclick="showRegister()">Register</a>
-            </p>
-            <p class="auth-switch hidden" id="auth-switch-register">
-                Already have an account? <a onclick="showLogin()">Sign In</a>
-            </p>
-        </div>
-    </div>
-
     <!-- Main Dashboard (hidden until logged in) -->
-    <div id="dashboard-container" class="hidden">
+    <div id="dashboard-container">
         <!-- Status Banner -->
         <div class="status-banner dry-run" id="status-banner">
             <div class="status-left">
@@ -182,10 +25,7 @@
                 <span class="divider">|</span>
                 <span class="status-item">Status: <span id="bot-status" class="status-indicator">--</span></span>
                 <span class="divider">|</span>
-                <div class="user-menu">
-                    <span class="user-name">Welcome, <span id="user-name">User</span></span>
-                    <button class="logout-btn" onclick="handleLogout()">Logout</button>
-                </div>
+                
             </div>
         </div>
 
@@ -323,142 +163,13 @@
         </div>
     </div>
 
-    <script>
-        // Auth State (disabled - public dashboard)
-        let authToken = null;
-        let currentUser = { name: 'Viewer' };
-
-        // Show dashboard directly on load (no auth required)
+        <script>
+        // Public dashboard - no auth required
         document.addEventListener('DOMContentLoaded', function() {
-            showDashboard();
-        });
-
-        function showLogin() {
-            document.getElementById('login-form').classList.remove('hidden');
-            document.getElementById('register-form').classList.add('hidden');
-            document.getElementById('auth-switch-login').classList.remove('hidden');
-            document.getElementById('auth-switch-register').classList.add('hidden');
-            document.getElementById('auth-subtitle').textContent = 'Sign in to access your dashboard';
-            document.getElementById('auth-error').classList.remove('visible');
-        }
-
-        function showRegister() {
-            document.getElementById('login-form').classList.add('hidden');
-            document.getElementById('register-form').classList.remove('hidden');
-            document.getElementById('auth-switch-login').classList.add('hidden');
-            document.getElementById('auth-switch-register').classList.remove('hidden');
-            document.getElementById('auth-subtitle').textContent = 'Create your account';
-            document.getElementById('auth-error').classList.remove('visible');
-        }
-
-        async function handleLogin(e) {
-            e.preventDefault();
-            const btn = document.getElementById('login-btn');
-            const errorDiv = document.getElementById('auth-error');
-
-            btn.disabled = true;
-            btn.textContent = 'Signing in...';
-            errorDiv.classList.remove('visible');
-
-            try {
-                const formData = new FormData();
-                formData.append('username', document.getElementById('login-email').value);
-                formData.append('password', document.getElementById('login-password').value);
-
-                const response = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.detail || 'Login failed');
-                }
-
-                const data = await response.json();
-                authToken = data.access_token;
-                currentUser = data.user;
-                localStorage.setItem('authToken', authToken);
-                localStorage.setItem('currentUser', JSON.stringify(currentUser));
-                showDashboard();
-            } catch (err) {
-                errorDiv.textContent = err.message;
-                errorDiv.classList.add('visible');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Sign In';
-            }
-        }
-
-        async function handleRegister(e) {
-            e.preventDefault();
-            const btn = document.getElementById('register-btn');
-            const errorDiv = document.getElementById('auth-error');
-
-            btn.disabled = true;
-            btn.textContent = 'Creating account...';
-            errorDiv.classList.remove('visible');
-
-            try {
-                const response = await fetch('/api/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: document.getElementById('register-name').value,
-                        email: document.getElementById('register-email').value,
-                        password: document.getElementById('register-password').value
-                    })
-                });
-
-                if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.detail || 'Registration failed');
-                }
-
-                const data = await response.json();
-                authToken = data.access_token;
-                currentUser = data.user;
-                localStorage.setItem('authToken', authToken);
-                localStorage.setItem('currentUser', JSON.stringify(currentUser));
-                showDashboard();
-            } catch (err) {
-                errorDiv.textContent = err.message;
-                errorDiv.classList.add('visible');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Create Account';
-            }
-        }
-
-        function handleLogout() {
-            authToken = null;
-            currentUser = null;
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('currentUser');
-            document.getElementById('auth-overlay').classList.remove('hidden');
-            document.getElementById('dashboard-container').classList.add('hidden');
-            showLogin();
-        }
-
-        function showDashboard() {
-            document.getElementById('auth-overlay').classList.add('hidden');
-            document.getElementById('dashboard-container').classList.remove('hidden');
-            document.getElementById('user-name').textContent = currentUser?.name || 'User';
-            // Initialize dashboard
             if (typeof initDashboard === 'function') {
                 initDashboard();
             }
-        }
-
-        // Override fetch to include auth token
-        const originalFetch = window.fetch;
-        window.fetch = function(url, options = {}) {
-            if (authToken && !url.includes('/api/auth/')) {
-                options.headers = options.headers || {};
-                options.headers['Authorization'] = `Bearer ${authToken}`;
-            }
-            return originalFetch(url, options);
-        };
+        });
     </script>
     <script src="/static/app.js"></script>
 </body>

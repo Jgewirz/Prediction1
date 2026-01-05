@@ -6,6 +6,7 @@ import argparse
 import json
 import csv
 import math
+import os
 import sys
 import time
 from datetime import datetime
@@ -26,6 +27,7 @@ from db import get_database, Database, get_postgres_database, PostgresDatabase
 from db.database import close_database
 from db.postgres import close_postgres_database
 from db.queries import Queries
+from calibration_tracker import CalibrationCurve, get_calibration_curve
 import openai
 import uuid
 
@@ -50,6 +52,11 @@ class SimpleTradingBot:
         self.db: Optional[Database] = None
         self.run_id: str = str(uuid.uuid4())
         self.max_close_ts = max_close_ts
+
+        # Initialize calibration curve for probability calibration (Phase 1 calibration)
+        self.calibration_curve: Optional[CalibrationCurve] = None
+        self._calibration_enabled = os.environ.get('CALIBRATION_ENABLED', 'true').lower() == 'true'
+        self._calibration_min_samples = int(os.environ.get('CALIBRATION_MIN_SAMPLES', '20'))
         
     async def initialize(self):
         """Initialize all API clients."""
@@ -138,6 +145,24 @@ class SimpleTradingBot:
         else:
             logger.info("TrendRadar integration disabled via config (TRENDRADAR_ENABLED=false)")
             self.console.print("[blue]TrendRadar integration disabled[/blue]")
+
+        # Initialize calibration curve (loads from disk if previously fitted)
+        if self._calibration_enabled:
+            self.calibration_curve = get_calibration_curve(
+                min_samples=self._calibration_min_samples
+            )
+            if self.calibration_curve.is_fitted:
+                self.console.print(
+                    f"[green][OK] Calibration curve loaded "
+                    f"(fitted on {self.calibration_curve.sample_count} samples)[/green]"
+                )
+            else:
+                self.console.print(
+                    f"[blue]Calibration curve not yet fitted "
+                    f"(need {self._calibration_min_samples} settled outcomes)[/blue]"
+                )
+        else:
+            self.console.print("[blue]Calibration disabled (CALIBRATION_ENABLED=false)[/blue]")
 
         # Show environment info
         env_color = "green" if self.config.kalshi.use_demo else "yellow"
@@ -302,17 +327,20 @@ class SimpleTradingBot:
         
         return kelly_bet_size
 
-    def calculate_dynamic_kelly(self, base_kelly: float, r_score: float, confidence: float) -> float:
+    def calculate_dynamic_kelly(self, base_kelly: float, r_score: float, confidence: float,
+                                 signal_strength: float = 0.0) -> float:
         """
-        Calculate Kelly fraction dynamically based on bet quality (R-score and confidence).
+        Calculate Kelly fraction dynamically based on bet quality (R-score, confidence, calibration).
 
         Higher R-scores and confidence warrant closer-to-full Kelly sizing.
         Lower quality bets use more conservative sizing.
+        Calibration accuracy influences confidence penalty severity.
 
         Args:
             base_kelly: Base Kelly fraction from probability edge
             r_score: Risk-adjusted edge score (z-score)
             confidence: Model's confidence in the probability estimate (0-1)
+            signal_strength: TrendRadar signal strength (0-1), 0 if no signal
 
         Returns:
             Quality-adjusted Kelly fraction
@@ -323,17 +351,46 @@ class SimpleTradingBot:
         r_score_normalized = min(max((r_score - self.config.z_threshold) / 2.2, 0), 1)
         r_score_multiplier = 0.5 + (r_score_normalized * 0.5)  # 0.5 to 1.0
 
-        # Confidence multiplier: square to penalize low confidence more severely
-        confidence_multiplier = confidence ** 2
+        # Confidence multiplier: severity depends on calibration accuracy
+        # If we have a well-calibrated system, be less harsh on confidence penalty
+        if self.calibration_curve and self.calibration_curve.is_fitted:
+            # Well-calibrated system: use confidence^1.5 (less severe)
+            confidence_multiplier = confidence ** 1.5
+        else:
+            # Not calibrated yet: use confidence^2 (more conservative)
+            confidence_multiplier = confidence ** 2
         confidence_multiplier = max(confidence_multiplier, 0.25)  # Floor at 0.25
 
+        # Signal alignment bonus (if TrendRadar signals are aligned)
+        signal_multiplier = 1.0
+        if signal_strength > 0.5:
+            signal_multiplier = 1.0 + (signal_strength * 0.2)  # Up to 20% boost
+
         # Combined quality multiplier
-        quality_multiplier = r_score_multiplier * confidence_multiplier
+        quality_multiplier = r_score_multiplier * confidence_multiplier * signal_multiplier
 
         # Apply to base Kelly
         adjusted_kelly = base_kelly * quality_multiplier * self.config.kelly_fraction
 
         return adjusted_kelly
+
+    def apply_calibration(self, raw_prob: float) -> float:
+        """
+        Apply probability calibration if available.
+
+        Args:
+            raw_prob: Raw model probability (0-100 scale)
+
+        Returns:
+            Calibrated probability (0-100 scale), or raw if no calibration
+        """
+        if self.calibration_curve and self.calibration_curve.is_fitted:
+            calibrated = self.calibration_curve.calibrate(raw_prob)
+            # Log significant adjustments
+            if abs(calibrated - raw_prob) > 5:
+                logger.debug(f"Calibration: {raw_prob:.1f}% -> {calibrated:.1f}%")
+            return calibrated
+        return raw_prob
 
     def calculate_quality_adjusted_position_size(self, kelly_fraction: float, r_score: float,
                                                   confidence: float) -> float:
@@ -2376,7 +2433,21 @@ async def show_statistics():
         return
 
     try:
-        db = await get_database(config.database.db_path)
+        # Initialize database based on DB_TYPE configuration
+        db_type = config.database.db_type.lower()
+        if db_type == "postgres":
+            db = await get_postgres_database(
+                host=config.database.pg_host,
+                database=config.database.pg_database,
+                user=config.database.pg_user,
+                password=config.database.pg_password,
+                port=config.database.pg_port,
+                ssl=config.database.pg_ssl
+            )
+            console.print("[green][OK] PostgreSQL database connected (Neon)[/green]")
+        else:
+            db = await get_database(config.database.db_path)
+            console.print("[green][OK] SQLite database connected[/green]")
 
         # Create a dummy kalshi client (not needed for stats)
         kalshi = KalshiClient(

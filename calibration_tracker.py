@@ -298,8 +298,266 @@ class CalibrationTracker:
         print("=" * 50 + "\n")
 
 
+# =============================================================================
+# CalibrationCurve: Isotonic Regression for Probability Calibration
+# =============================================================================
+
+class CalibrationCurve:
+    """
+    Probability calibration using isotonic regression.
+
+    Maps raw model probabilities to calibrated probabilities based on
+    historical prediction accuracy. Isotonic regression ensures monotonicity
+    (higher raw probabilities -> higher calibrated probabilities).
+
+    Anti-reward-hacking: Uses isotonic regression which is inherently
+    regularized by monotonicity constraint, preventing overfitting.
+    """
+
+    def __init__(self, min_samples: int = 20, storage_path: str = "calibration_curve.json"):
+        """
+        Initialize calibration curve.
+
+        Args:
+            min_samples: Minimum resolved predictions before calibration is applied
+            storage_path: Path to store calibration parameters
+        """
+        self.min_samples = min_samples
+        self.storage_path = Path(storage_path)
+        self._isotonic = None
+        self._fitted = False
+        self._last_fit_count = 0
+        self._load()
+
+    def _load(self):
+        """Load saved calibration curve if available."""
+        if self.storage_path.exists():
+            try:
+                with open(self.storage_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self._last_fit_count = data.get('fit_count', 0)
+
+                    # Load isotonic regression parameters
+                    if 'x_points' in data and 'y_points' in data:
+                        try:
+                            from sklearn.isotonic import IsotonicRegression
+                            self._isotonic = IsotonicRegression(out_of_bounds='clip')
+                            self._isotonic.fit(data['x_points'], data['y_points'])
+                            self._fitted = True
+                            logger.info(f"Loaded calibration curve from {self.storage_path} "
+                                       f"(fitted on {self._last_fit_count} samples)")
+                        except ImportError:
+                            logger.warning("scikit-learn not available - calibration disabled")
+            except Exception as e:
+                logger.warning(f"Could not load calibration curve: {e}")
+
+    def _save(self, x_points: List[float], y_points: List[float], fit_count: int):
+        """Save calibration curve parameters."""
+        try:
+            with open(self.storage_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'x_points': x_points,
+                    'y_points': y_points,
+                    'fit_count': fit_count,
+                    'timestamp': datetime.now().isoformat()
+                }, f, indent=2)
+            logger.info(f"Saved calibration curve to {self.storage_path}")
+        except Exception as e:
+            logger.error(f"Could not save calibration curve: {e}")
+
+    def fit(self, predicted_probs: List[float], outcomes: List[float]) -> bool:
+        """
+        Fit isotonic regression calibration curve.
+
+        Args:
+            predicted_probs: List of predicted probabilities (0-100 scale)
+            outcomes: List of actual outcomes (0 or 1)
+
+        Returns:
+            True if fitting succeeded, False otherwise
+        """
+        if len(predicted_probs) < self.min_samples:
+            logger.info(f"Not enough samples to fit calibration curve "
+                       f"({len(predicted_probs)} < {self.min_samples})")
+            return False
+
+        try:
+            from sklearn.isotonic import IsotonicRegression
+
+            # Convert to 0-1 scale for isotonic regression
+            x = [p / 100.0 for p in predicted_probs]
+            y = outcomes
+
+            # Fit isotonic regression with clip for out-of-bounds predictions
+            self._isotonic = IsotonicRegression(out_of_bounds='clip')
+            self._isotonic.fit(x, y)
+
+            self._fitted = True
+            self._last_fit_count = len(predicted_probs)
+
+            # Save for persistence
+            self._save(x, y, self._last_fit_count)
+
+            logger.info(f"Fitted calibration curve on {len(predicted_probs)} samples")
+            return True
+
+        except ImportError:
+            logger.error("scikit-learn required for calibration. Install with: pip install scikit-learn")
+            return False
+        except Exception as e:
+            logger.error(f"Error fitting calibration curve: {e}")
+            return False
+
+    def fit_from_tracker(self, tracker: 'CalibrationTracker') -> bool:
+        """
+        Fit calibration curve from a CalibrationTracker instance.
+
+        Args:
+            tracker: CalibrationTracker with resolved predictions
+
+        Returns:
+            True if fitting succeeded, False otherwise
+        """
+        resolved = tracker.get_resolved_predictions()
+
+        if len(resolved) < self.min_samples:
+            return False
+
+        predicted_probs = [e["predicted_prob"] for e in resolved]
+        outcomes = [e["outcome"] for e in resolved]
+
+        return self.fit(predicted_probs, outcomes)
+
+    def calibrate(self, raw_prob: float) -> float:
+        """
+        Apply calibration curve to a raw probability.
+
+        Args:
+            raw_prob: Raw probability (0-100 scale)
+
+        Returns:
+            Calibrated probability (0-100 scale)
+        """
+        if not self._fitted or self._isotonic is None:
+            # No calibration available - return raw
+            return raw_prob
+
+        try:
+            # Convert to 0-1 scale for isotonic regression
+            x = raw_prob / 100.0
+
+            # Apply isotonic regression
+            calibrated = self._isotonic.predict([x])[0]
+
+            # Convert back to 0-100 scale
+            return calibrated * 100.0
+
+        except Exception as e:
+            logger.warning(f"Calibration failed, returning raw: {e}")
+            return raw_prob
+
+    def calibrate_batch(self, raw_probs: List[float]) -> List[float]:
+        """
+        Apply calibration to multiple probabilities.
+
+        Args:
+            raw_probs: List of raw probabilities (0-100 scale)
+
+        Returns:
+            List of calibrated probabilities (0-100 scale)
+        """
+        if not self._fitted or self._isotonic is None:
+            return raw_probs
+
+        try:
+            # Convert to 0-1 scale
+            x = [p / 100.0 for p in raw_probs]
+
+            # Apply isotonic regression
+            calibrated = self._isotonic.predict(x)
+
+            # Convert back to 0-100 scale
+            return [c * 100.0 for c in calibrated]
+
+        except Exception as e:
+            logger.warning(f"Batch calibration failed, returning raw: {e}")
+            return raw_probs
+
+    @property
+    def is_fitted(self) -> bool:
+        """Check if calibration curve is fitted and ready."""
+        return self._fitted
+
+    @property
+    def sample_count(self) -> int:
+        """Number of samples used for fitting."""
+        return self._last_fit_count
+
+    def get_calibration_stats(self) -> Dict[str, Any]:
+        """Get calibration curve statistics."""
+        return {
+            "fitted": self._fitted,
+            "sample_count": self._last_fit_count,
+            "min_samples_required": self.min_samples,
+            "storage_path": str(self.storage_path)
+        }
+
+
+def calculate_expected_calibration_error(predicted_probs: List[float],
+                                         outcomes: List[float],
+                                         n_bins: int = 10) -> float:
+    """
+    Calculate Expected Calibration Error (ECE).
+
+    ECE measures how well confidence matches actual accuracy across probability bins.
+    Lower is better (0 = perfectly calibrated).
+
+    Args:
+        predicted_probs: List of predicted probabilities (0-100 scale)
+        outcomes: List of actual outcomes (0 or 1)
+        n_bins: Number of bins for calibration
+
+    Returns:
+        ECE score (0 to 1, lower is better)
+    """
+    if not predicted_probs or not outcomes:
+        return 0.0
+
+    # Convert to 0-1 scale
+    probs = [p / 100.0 for p in predicted_probs]
+
+    # Create bins
+    bin_edges = [i / n_bins for i in range(n_bins + 1)]
+    total_samples = len(probs)
+    ece = 0.0
+
+    for i in range(n_bins):
+        # Get samples in this bin
+        bin_lower = bin_edges[i]
+        bin_upper = bin_edges[i + 1]
+
+        bin_mask = [(bin_lower <= p < bin_upper) for p in probs]
+        bin_count = sum(bin_mask)
+
+        if bin_count == 0:
+            continue
+
+        # Calculate average confidence and accuracy in this bin
+        bin_probs = [p for p, m in zip(probs, bin_mask) if m]
+        bin_outcomes = [o for o, m in zip(outcomes, bin_mask) if m]
+
+        avg_confidence = sum(bin_probs) / bin_count
+        avg_accuracy = sum(bin_outcomes) / bin_count
+
+        # Add weighted absolute difference to ECE
+        ece += (bin_count / total_samples) * abs(avg_accuracy - avg_confidence)
+
+    return ece
+
+
 # Global tracker instance for convenience
 _tracker: Optional[CalibrationTracker] = None
+_curve: Optional[CalibrationCurve] = None
 
 
 def get_tracker(storage_path: str = "calibration_data.json") -> CalibrationTracker:
@@ -308,4 +566,13 @@ def get_tracker(storage_path: str = "calibration_data.json") -> CalibrationTrack
     if _tracker is None:
         _tracker = CalibrationTracker(storage_path)
     return _tracker
+
+
+def get_calibration_curve(min_samples: int = 20,
+                          storage_path: str = "calibration_curve.json") -> CalibrationCurve:
+    """Get or create global calibration curve."""
+    global _curve
+    if _curve is None:
+        _curve = CalibrationCurve(min_samples, storage_path)
+    return _curve
 

@@ -111,3 +111,6 @@ octagon_config.json
 
 *betting_decisions_*render.env
 betting_decisions/
+
+# Auto Claude data directory
+.auto-claude/

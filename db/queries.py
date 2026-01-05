@@ -358,3 +358,137 @@ class Queries:
         WHERE decision_id = ?
         LIMIT 1
     """
+
+    # ========== ROI Calibration System Queries (Phase 1) ==========
+
+    GET_CALIBRATION_DATA_FOR_CURVE = """
+        SELECT
+            research_probability as predicted_prob,
+            CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END as outcome,
+            confidence,
+            r_score,
+            action
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+          AND research_probability IS NOT NULL
+        ORDER BY timestamp ASC
+    """
+
+    GET_PROBABILITY_BUCKET_ACCURACY = """
+        SELECT
+            CASE
+                WHEN research_probability < 20 THEN '0-20%'
+                WHEN research_probability < 40 THEN '20-40%'
+                WHEN research_probability < 60 THEN '40-60%'
+                WHEN research_probability < 80 THEN '60-80%'
+                ELSE '80-100%'
+            END as prob_bucket,
+            COUNT(*) as count,
+            AVG(research_probability) as avg_predicted,
+            AVG(CASE WHEN outcome = 'yes' THEN 100.0 ELSE 0.0 END) as avg_actual,
+            ABS(AVG(research_probability) - AVG(CASE WHEN outcome = 'yes' THEN 100.0 ELSE 0.0 END)) as calibration_error
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+          AND research_probability IS NOT NULL
+        GROUP BY prob_bucket
+        ORDER BY prob_bucket
+    """
+
+    GET_EDGE_DISTRIBUTION = """
+        SELECT
+            CASE
+                WHEN ABS(research_probability - market_price * 100) < 5 THEN 'tiny (<5%)'
+                WHEN ABS(research_probability - market_price * 100) < 10 THEN 'small (5-10%)'
+                WHEN ABS(research_probability - market_price * 100) < 20 THEN 'medium (10-20%)'
+                ELSE 'large (>20%)'
+            END as edge_bucket,
+            COUNT(*) as count,
+            AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) as win_rate,
+            SUM(profit_loss) as total_pnl,
+            AVG(profit_loss) as avg_pnl
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+          AND research_probability IS NOT NULL
+          AND market_price IS NOT NULL
+        GROUP BY edge_bucket
+        ORDER BY edge_bucket
+    """
+
+    GET_OVERCONFIDENCE_ANALYSIS = """
+        SELECT
+            AVG(research_probability / 100.0) as avg_predicted_prob,
+            AVG(CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END) as avg_actual_outcome,
+            AVG(research_probability / 100.0) - AVG(CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END) as overconfidence_bias,
+            COUNT(*) as sample_size,
+            AVG(confidence) as avg_confidence
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+          AND research_probability IS NOT NULL
+    """
+
+    GET_KELLY_SIZE_EFFECTIVENESS = """
+        SELECT
+            CASE
+                WHEN bet_amount < 5 THEN 'micro (<$5)'
+                WHEN bet_amount < 25 THEN 'small ($5-25)'
+                WHEN bet_amount < 75 THEN 'medium ($25-75)'
+                ELSE 'large (>$75)'
+            END as size_bucket,
+            COUNT(*) as count,
+            AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) as win_rate,
+            SUM(profit_loss) as total_pnl,
+            AVG(profit_loss) as avg_pnl,
+            AVG(kelly_fraction) as avg_kelly
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+        GROUP BY size_bucket
+        ORDER BY size_bucket
+    """
+
+    GET_RECENT_PERFORMANCE_TREND = """
+        SELECT
+            DATE(timestamp) as date,
+            COUNT(*) as num_bets,
+            SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+            SUM(CASE WHEN profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+            SUM(profit_loss) as daily_pnl,
+            AVG(r_score) as avg_r_score,
+            AVG(confidence) as avg_confidence
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND timestamp >= date('now', '-30 days')
+        GROUP BY DATE(timestamp)
+        ORDER BY date DESC
+    """
+
+    GET_CALIBRATION_SUMMARY = """
+        SELECT
+            COUNT(*) as total_settled,
+            AVG(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0.0 END) as win_rate,
+            SUM(profit_loss) as total_pnl,
+            SUM(bet_amount) as total_wagered,
+            CASE WHEN SUM(bet_amount) > 0
+                THEN SUM(profit_loss) / SUM(bet_amount) * 100
+                ELSE 0
+            END as roi_pct,
+            AVG(
+                (research_probability/100.0 - CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END) *
+                (research_probability/100.0 - CASE WHEN outcome = 'yes' THEN 1.0 ELSE 0.0 END)
+            ) as brier_score,
+            AVG(r_score) as avg_r_score,
+            AVG(confidence) as avg_confidence
+        FROM betting_decisions
+        WHERE status = 'settled'
+          AND action != 'skip'
+          AND outcome IS NOT NULL
+    """
