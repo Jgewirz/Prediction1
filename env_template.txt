@@ -90,14 +90,81 @@ MAX_HEDGE_AMOUNT=50.0         # Maximum hedge amount per bet in dollars
 #    - Only use production after thorough testing
 
 # =============================================================================
+# DATABASE CONFIGURATION (PostgreSQL - Neon)
+# =============================================================================
+
+# Database type: 'postgres' (recommended) or 'sqlite'
+DB_TYPE=postgres
+
+# PostgreSQL settings (required for postgres)
+PGHOST=your-neon-host.neon.tech
+PGDATABASE=neondb
+PGUSER=your_db_user
+PGPASSWORD=your_db_password
+PGPORT=5432
+PGSSLMODE=require
+
+# SQLite settings (if using sqlite)
+DB_PATH=trading_bot.db
+
+# Database features
+ENABLE_DB=true
+SAVE_TO_CSV=true
+DB_MIGRATE_ON_STARTUP=true
+AUTO_RECONCILE=true
+
+# =============================================================================
+# RISK MANAGEMENT & KELLY SIZING
+# =============================================================================
+
+# R-score filtering (z-score threshold for placing bets)
+Z_THRESHOLD=1.5
+
+# Kelly criterion sizing
+ENABLE_KELLY_SIZING=true
+KELLY_FRACTION=0.5
+MAX_KELLY_BET_FRACTION=0.1
+BANKROLL=1000.0
+
+# Portfolio management
+MAX_PORTFOLIO_POSITIONS=10
+PORTFOLIO_SELECTION_METHOD=top_r_scores
+
+# Daily loss limits (kill switch)
+MAX_DAILY_LOSS=100.0
+MAX_DAILY_LOSS_PCT=0.10
+ENABLE_KILL_SWITCH=true
+MAX_TOTAL_EXPOSURE=500.0
+
+# =============================================================================
+# TRENDRADAR NEWS INTELLIGENCE (Optional)
+# =============================================================================
+
+TRENDRADAR_ENABLED=true
+TRENDRADAR_URL=http://localhost:3333
+TRENDRADAR_TIMEOUT=10.0
+TRENDRADAR_MAX_RETRIES=2
+TRENDRADAR_CIRCUIT_THRESHOLD=3
+
+# =============================================================================
+# STOP-LOSS / TAKE-PROFIT (Optional)
+# =============================================================================
+
+SL_TP_ENABLED=true
+DEFAULT_STOP_LOSS_PCT=0.15
+DEFAULT_TAKE_PROFIT_PCT=0.30
+TRAILING_STOP_ENABLED=false
+TRAILING_STOP_PCT=0.10
+
+# =============================================================================
 # RECOMMENDED TESTING FLOW
 # =============================================================================
 
 # Phase 1: Demo + Dry Run
 # KALSHI_USE_DEMO=true, DRY_RUN=true, MAX_EVENTS_TO_ANALYZE=5
 
-# Phase 2: Demo + Live Trading  
+# Phase 2: Demo + Live Trading
 # KALSHI_USE_DEMO=true, DRY_RUN=false, MAX_EVENTS_TO_ANALYZE=10
 
 # Phase 3: Production + Live Trading
-# KALSHI_USE_DEMO=false, DRY_RUN=false, MAX_EVENTS_TO_ANALYZE=50 
+# KALSHI_USE_DEMO=false, DRY_RUN=false, MAX_EVENTS_TO_ANALYZE=50

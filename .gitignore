@@ -109,4 +109,5 @@ octagon_config.json
 .kalshi.demo.pem
 .kalshi.pem
 
-*betting_decisions_*
+*betting_decisions_*render.env
+betting_decisions/
