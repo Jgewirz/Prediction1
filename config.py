@@ -36,11 +36,8 @@ class KalshiConfig(BaseModel):
             v = v[1:-1]
 
         # Convert escaped newlines to actual newlines
-        if '
-' in v:
-            v = v.replace('
-', '
-')
+        if '\\n' in v:
+            v = v.replace('\\n', '\n')
 
         # If it looks like a file path, try to read it
         if not v.startswith('-----BEGIN') and (Path(v).exists() or v.endswith('.pem')):
