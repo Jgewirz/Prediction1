@@ -30,6 +30,18 @@ class KalshiConfig(BaseModel):
         if not v or v == "your_kalshi_private_key_here":
             raise ValueError("KALSHI_PRIVATE_KEY is required. Please set it in your .env file.")
         
+        # Strip surrounding quotes (common when copying from env files to Render)
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+
+        # Convert escaped newlines to actual newlines
+        if '
+' in v:
+            v = v.replace('
+', '
+')
+
         # If it looks like a file path, try to read it
         if not v.startswith('-----BEGIN') and (Path(v).exists() or v.endswith('.pem')):
             try:
