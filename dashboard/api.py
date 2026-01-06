@@ -758,6 +758,25 @@ async def broadcast_status_update(status: Dict[str, Any]) -> Dict[str, Any]:
     return {"sent_to": sent, "message": "Status broadcast"}
 
 
+@app.post("/api/broadcast/workflow")
+async def broadcast_workflow_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Broadcast workflow step update to subscribers.
+    Called at each step of the trading bot CLI workflow.
+
+    Expected step format:
+    {
+        "step_number": 1,
+        "step_name": "Fetching events",
+        "status": "running" | "completed" | "failed",
+        "description": "Optional description",
+        "details": {"events_found": 25, ...}
+    }
+    """
+    sent = await manager.broadcast_workflow_step(step)
+    return {"sent_to": sent, "message": "Workflow step broadcast"}
+
+
 # === Time Series Chart Endpoints ===
 
 @app.get("/api/charts/pnl-curve")

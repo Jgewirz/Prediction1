@@ -173,6 +173,61 @@ async def broadcast_status(
         return False
 
 
+async def broadcast_workflow_step(
+    step_number: int,
+    step_name: str,
+    status: str = "running",
+    description: str = "",
+    details: Optional[Dict[str, Any]] = None,
+    base_url: str = DASHBOARD_API_URL
+) -> bool:
+    """
+    Broadcast a workflow step update to the dashboard.
+
+    Streams CLI progress to connected dashboard clients in real-time.
+
+    Args:
+        step_number: Step number (1-10)
+        step_name: Short step name (e.g., "Fetching events")
+        status: One of "running", "completed", "failed", "skipped"
+        description: Optional longer description
+        details: Optional dict with step-specific data (e.g., {"events_found": 25})
+        base_url: Dashboard API URL
+
+    Returns:
+        True if broadcast succeeded, False otherwise
+    """
+    from datetime import datetime
+
+    step_data = {
+        "step_number": step_number,
+        "step_name": step_name,
+        "status": status,
+        "description": description,
+        "details": details or {},
+        "timestamp": datetime.now().isoformat()
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{base_url}/api/broadcast/workflow",
+                json=step_data
+            )
+            if response.status_code == 200:
+                logger.debug(f"Workflow step {step_number} ({step_name}) broadcast")
+                return True
+            else:
+                logger.warning(f"Workflow broadcast failed: {response.status_code}")
+                return False
+    except httpx.ConnectError:
+        logger.debug("Dashboard not available for workflow broadcast")
+        return False
+    except Exception as e:
+        logger.debug(f"Workflow broadcast error: {e}")
+        return False
+
+
 class DashboardBroadcaster:
     """
     Context manager for dashboard broadcasting.
@@ -230,3 +285,9 @@ class DashboardBroadcaster:
         if not self.enabled:
             return False
         return await broadcast_status(bot_running, mode, kwargs, base_url=self.base_url)
+
+    async def workflow(self, step_number: int, step_name: str, status: str = "running",
+                       description: str = "", details: Optional[Dict[str, Any]] = None) -> bool:
+        if not self.enabled:
+            return False
+        return await broadcast_workflow_step(step_number, step_name, status, description, details, base_url=self.base_url)

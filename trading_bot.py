@@ -28,7 +28,7 @@ from db.database import close_database
 from db.postgres import close_postgres_database
 from db.queries import Queries
 from calibration_tracker import CalibrationCurve, get_calibration_curve
-from dashboard.broadcaster import broadcast_decision, broadcast_kpi_update, broadcast_alert, broadcast_status
+from dashboard.broadcaster import broadcast_decision, broadcast_kpi_update, broadcast_alert, broadcast_status, broadcast_workflow_step
 import openai
 import uuid
 
@@ -69,6 +69,7 @@ class SimpleTradingBot:
             self.config.minimum_time_remaining_hours,
             self.config.max_markets_per_event,
             max_close_ts=self.max_close_ts,
+            early_entry_config=self.config.early_entry,
         )
         self.research_client = OctagonClient(self.config.octagon, self.config.openai)
         self.openai_client = openai.AsyncOpenAI(api_key=self.config.openai.api_key)
@@ -2300,17 +2301,38 @@ class SimpleTradingBot:
                 return
 
             # Execute the main workflow
+            # Step 1: Fetch events
+            await broadcast_workflow_step(1, "Fetching events", "running",
+                "Querying Kalshi API for early entry opportunities")
             events = await self.get_top_events()
+            early_entry_enabled = self.config.early_entry.enabled if hasattr(self.config, 'early_entry') else False
+            await broadcast_workflow_step(1, "Fetching events", "completed",
+                details={"events_found": len(events), "early_entry_mode": early_entry_enabled})
             if not events:
+                await broadcast_workflow_step(1, "Fetching events", "failed", "No events found")
                 self.console.print("[red]No events found. Exiting.[/red]")
                 return
-            
+
+            # Step 2: Process markets
+            await broadcast_workflow_step(2, "Processing markets", "running",
+                f"Processing markets for {len(events)} events")
             event_markets = await self.get_markets_for_events(events)
+            total_markets = sum(len(data['markets']) for data in event_markets.values())
+            await broadcast_workflow_step(2, "Processing markets", "completed",
+                details={"events_count": len(event_markets), "markets_count": total_markets})
             if not event_markets:
+                await broadcast_workflow_step(2, "Processing markets", "failed", "No markets found")
                 self.console.print("[red]No markets found. Exiting.[/red]")
                 return
-            
+
+            # Step 2.5: Filter positions
+            await broadcast_workflow_step(3, "Filtering positions", "running",
+                "Checking for existing positions to avoid duplicates")
+            markets_before = sum(len(data['markets']) for data in event_markets.values())
             event_markets = await self.filter_markets_by_positions(event_markets)
+            markets_after = sum(len(data['markets']) for data in event_markets.values())
+            await broadcast_workflow_step(3, "Filtering positions", "completed",
+                details={"filtered_count": markets_before - markets_after, "remaining_count": markets_after})
             if not event_markets:
                 self.console.print("[red]No markets remaining after position filtering. Exiting.[/red]")
                 return
@@ -2333,26 +2355,60 @@ class SimpleTradingBot:
 
                 self.console.print(f"[blue]* Limited to top {len(event_markets)} events by volume after position filtering[/blue]")
 
-            # Step 3.25: Fetch trending signals from TrendRadar
+            # Step 4: Fetch trending signals from TrendRadar
+            await broadcast_workflow_step(4, "Fetching signals", "running",
+                "Querying TrendRadar for news sentiment signals")
             signals_by_event = await self.fetch_trending_signals(event_markets)
+            total_signals = sum(len(s) for s in signals_by_event.values())
+            await broadcast_workflow_step(4, "Fetching signals", "completed",
+                details={"signals_count": total_signals, "events_with_signals": len(signals_by_event)})
 
+            # Step 5: Research events
+            await broadcast_workflow_step(5, "Researching events", "running",
+                f"Deep research on {len(event_markets)} events via GPT-4o")
             research_results = await self.research_events(event_markets, signals_by_event)
+            await broadcast_workflow_step(5, "Researching events", "completed",
+                details={"events_researched": len(research_results)})
             if not research_results:
+                await broadcast_workflow_step(5, "Researching events", "failed", "No research results")
                 self.console.print("[red]No research results. Exiting.[/red]")
                 return
-            
+
+            # Step 6: Extract probabilities
+            await broadcast_workflow_step(6, "Extracting probabilities", "running",
+                "Using GPT-5 to extract structured probabilities from research")
             probability_extractions = await self.extract_probabilities(research_results, event_markets)
+            await broadcast_workflow_step(6, "Extracting probabilities", "completed",
+                details={"events_processed": len(probability_extractions)})
             if not probability_extractions:
+                await broadcast_workflow_step(6, "Extracting probabilities", "failed", "No probability extractions")
                 self.console.print("[red]No probability extractions. Exiting.[/red]")
                 return
-            
+
+            # Step 7: Fetch market odds
+            await broadcast_workflow_step(7, "Fetching odds", "running",
+                "Getting current bid/ask prices from Kalshi")
             market_odds = await self.get_market_odds(event_markets)
+            await broadcast_workflow_step(7, "Fetching odds", "completed",
+                details={"markets_count": len(market_odds)})
             if not market_odds:
+                await broadcast_workflow_step(7, "Fetching odds", "failed", "No market odds found")
                 self.console.print("[red]No market odds found. Exiting.[/red]")
                 return
-            
+
+            # Step 8: Generate betting decisions
+            await broadcast_workflow_step(8, "Generating decisions", "running",
+                "Calculating R-scores and Kelly fractions for betting decisions")
             analysis = await self.get_betting_decisions(event_markets, probability_extractions, market_odds)
+            actionable_count = len([d for d in analysis.decisions if d.action != "skip"])
+            skip_count = len([d for d in analysis.decisions if d.action == "skip"])
+            await broadcast_workflow_step(8, "Generating decisions", "completed",
+                details={"decisions_count": len(analysis.decisions), "actionable_count": actionable_count, "skip_count": skip_count})
             
+            # Step 9: Save & Broadcast
+            await broadcast_workflow_step(9, "Saving decisions", "running",
+                "Saving decisions to database and broadcasting to dashboard")
+
             # Save betting decisions to CSV with research data (if enabled)
             if self.config.database.save_to_csv:
                 self.save_betting_decisions_to_csv(
@@ -2399,7 +2455,16 @@ class SimpleTradingBot:
                 # Trigger KPI recalculation on dashboard
                 await broadcast_kpi_update()
 
+            await broadcast_workflow_step(9, "Saving decisions", "completed",
+                details={"saved_count": decisions_saved, "broadcast_status": "completed"})
+
+            # Step 10: Place bets
+            await broadcast_workflow_step(10, "Placing bets", "running",
+                f"Executing {actionable_count} bet orders on Kalshi")
             await self.place_bets(analysis, market_odds, probability_extractions)
+            total_wagered = sum(d.amount for d in analysis.decisions if d.action != "skip")
+            await broadcast_workflow_step(10, "Placing bets", "completed",
+                details={"bets_placed": actionable_count, "total_wagered": total_wagered, "mode": "live" if not self.config.dry_run else "dry_run"})
 
             # Record successful run completion
             if self.db:

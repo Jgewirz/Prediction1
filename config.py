@@ -170,6 +170,23 @@ class StopLossConfig(BaseModel):
     alert_on_near_trigger_pct: float = Field(default=0.05, ge=0.0, le=0.20, description="Alert when within this percentage of trigger")
 
 
+class EarlyEntryConfig(BaseModel):
+    """Early entry event selection strategy - prioritize new, low-volume opportunities."""
+    enabled: bool = Field(default=True, description="Enable early entry selection strategy")
+
+    # Market age filters
+    max_market_age_hours: float = Field(default=48.0, ge=1.0, le=168.0, description="Maximum market age in hours (only consider markets opened within this window)")
+    min_time_remaining_hours: float = Field(default=24.0, ge=1.0, le=720.0, description="Minimum hours until market close (skip markets closing too soon)")
+
+    # Volume filters
+    max_volume_24h: int = Field(default=10000, ge=100, le=1000000, description="Maximum 24h volume to consider (lower = earlier opportunities)")
+
+    # Scoring weights (must sum to 1.0 for normalized scoring)
+    recency_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Weight for market recency (newer = higher score)")
+    low_volume_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for low volume (lower volume = higher score)")
+    time_remaining_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for time remaining (more time = higher score)")
+
+
 def _clean_env_value(value: str) -> str:
     """Clean environment variable value by removing inline comments."""
     # Split on '#' and take the first part, then strip whitespace
@@ -187,6 +204,7 @@ class BotConfig(BaseSettings):
     trendradar: TrendRadarConfig = Field(default_factory=TrendRadarConfig, description="TrendRadar news intelligence configuration")
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig, description="Scheduler configuration for continuous operation")
     stop_loss: StopLossConfig = Field(default_factory=StopLossConfig, description="Stop-loss and take-profit configuration")
+    early_entry: EarlyEntryConfig = Field(default_factory=EarlyEntryConfig, description="Early entry event selection strategy")
     
     # Bot settings
     dry_run: bool = Field(default=True, description="Run in dry-run mode (overridden by CLI)")
@@ -321,6 +339,16 @@ class BotConfig(BaseSettings):
             alert_on_near_trigger_pct=float(_clean_env_value(os.getenv("ALERT_ON_NEAR_TRIGGER_PCT", "0.05")))
         )
 
+        early_entry_config = EarlyEntryConfig(
+            enabled=_clean_env_value(os.getenv("EARLY_ENTRY_ENABLED", "true")).lower() == "true",
+            max_market_age_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_AGE_HOURS", "48.0"))),
+            min_time_remaining_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MIN_TIME_HOURS", "24.0"))),
+            max_volume_24h=int(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_VOLUME", "10000"))),
+            recency_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_RECENCY_WEIGHT", "0.4"))),
+            low_volume_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_VOLUME_WEIGHT", "0.3"))),
+            time_remaining_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_TIME_WEIGHT", "0.3")))
+        )
+
         data.update({
             "kalshi": kalshi_config,
             "octagon": octagon_config,
@@ -329,6 +357,7 @@ class BotConfig(BaseSettings):
             "trendradar": trendradar_config,
             "scheduler": scheduler_config,
             "stop_loss": stop_loss_config,
+            "early_entry": early_entry_config,
             "dry_run": True,  # Default to dry run, overridden by CLI
             "max_bet_amount": float(_clean_env_value(os.getenv("MAX_BET_AMOUNT", "100.0"))),
             "max_events_to_analyze": int(_clean_env_value(os.getenv("MAX_EVENTS_TO_ANALYZE", "50"))),

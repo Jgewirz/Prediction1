@@ -6,12 +6,91 @@ Production hardening:
 - Prompt injection protection for trending headlines
 - Character limits and sanitization
 - Non-authoritative signal framing
+
+Calibration enhancements (Phase 4):
+- Base rate anchoring to prevent overconfidence
+- Explicit uncertainty quantification
+- Calibration guidelines embedded in prompts
 """
 import re
 import openai
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from loguru import logger
 from config import OctagonConfig, OpenAIConfig
+
+
+# =============================================================================
+# CALIBRATION-AWARE PROMPT TEMPLATES
+# =============================================================================
+
+CALIBRATION_SYSTEM_PROMPT = """You are a calibrated prediction market analyst. Your probability estimates are tracked for accuracy over time.
+
+CALIBRATION PRINCIPLES:
+1. Start with base rates - most binary events have significant uncertainty
+2. Only move away from 50% with STRONG, verifiable evidence
+3. Use confidence < 0.5 for inherently uncertain markets
+4. Quantify uncertainty honestly - if you'd say "60-70%", use 65% with confidence 0.6
+
+OVERCONFIDENCE TRAPS TO AVOID:
+- Recency bias: Don't overweight events from the last 24-48 hours
+- Availability bias: Rare events seem more likely when recently discussed
+- Confirmation bias: Seek disconfirming evidence, not just supporting facts
+- Consensus ≠ correctness: Markets and polls can be systematically wrong
+- Narrative fallacy: Compelling stories don't make events more likely
+
+PROBABILITY GUIDELINES BY CONFIDENCE LEVEL:
+- 90%+ only for: Legally/physically required outcomes, signed contracts, completed events
+- 75-89% for: Strong institutional commitments, consistent polling >60%, clear trends
+- 55-74% for: Moderate evidence, mixed signals, competitive situations
+- 45-54% for: True uncertainty, insufficient data, balanced factors
+- Under 45% for: Unlikely but possible, against trend, contrarian positions
+
+Always include the market TICKER when giving probability estimates.
+Format: "TICKER: XX% probability (confidence: X/10)"
+Be specific with percentages, not ranges."""
+
+CALIBRATION_USER_PROMPT_TEMPLATE = """Analyze this prediction market event with CALIBRATED probability estimates.
+
+{event_info}
+
+{markets_info}
+{trending_section}
+
+ANALYSIS REQUIREMENTS:
+
+1. **Base Rate Check**:
+   - What is the historical base rate for similar events?
+   - How should that anchor your probability estimates?
+
+2. **Market Predictions** (for EACH market):
+   - Market ticker and title
+   - Probability estimate (0-100%) for YES outcome
+   - Confidence level (1-10) reflecting your uncertainty
+   - Key reasoning with BOTH supporting and opposing factors
+   - Base rate comparison: Is this above/below typical rates?
+
+3. **Uncertainty Analysis**:
+   - What information would change your estimates significantly?
+   - What are you most uncertain about?
+   - Are there any "unknown unknowns" that could matter?
+
+4. **Calibration Check**:
+   - For each prediction, ask: "If I made 100 predictions at this probability, would ~X actually occur?"
+   - Adjust if your gut says different than your stated probability
+
+FORMATTING:
+- Always include market TICKER: "KXMARKET-123: 65% probability (confidence: 7/10)"
+- If mutually exclusive: probabilities should sum to ~100%
+- If independent: evaluate each market separately
+- Be specific (65% not "60-70%")
+
+Example:
+"KXMARKET-123: 62% probability (confidence: 6/10)
+Base rate for similar events: ~55%. Adjusting +7% due to [specific factor].
+Supporting: [evidence for YES]
+Opposing: [evidence for NO]
+Uncertainty: [what could change this]"
+"""
 
 
 # Maximum characters per headline to prevent token overflow
@@ -88,16 +167,29 @@ def sanitize_trending_context(context: str) -> str:
 
 
 class OctagonClient:
-    """Client for OpenAI Research API (replaces Octagon/Perplexity)."""
+    """Client for OpenAI Research API (replaces Octagon/Perplexity).
 
-    def __init__(self, config: OctagonConfig, openai_config: OpenAIConfig = None):
+    Supports calibration-aware prompts for improved probability accuracy.
+    """
+
+    def __init__(self, config: OctagonConfig, openai_config: OpenAIConfig = None,
+                 use_calibration_prompts: bool = True):
+        """Initialize the research client.
+
+        Args:
+            config: OctagonConfig with API settings
+            openai_config: Optional OpenAI config override
+            use_calibration_prompts: Enable calibration-aware prompts (default: True)
+        """
         self.config = config
+        self.use_calibration_prompts = use_calibration_prompts
         # Use OpenAI directly for research
         self.client = openai.AsyncOpenAI(
             api_key=openai_config.api_key if openai_config else config.api_key,
             timeout=120.0
         )
         self.model = "gpt-4o"
+        logger.info(f"Research client initialized (calibration_prompts={use_calibration_prompts})")
 
     async def research_event(self, event: Dict[str, Any], markets: List[Dict[str, Any]], trending_context: str = "") -> str:
         """
@@ -168,7 +260,18 @@ Avoid overconfidence based solely on headline sentiment.
 
 """
 
-            prompt = f"""You are an expert prediction market analyst. Analyze this event and predict probabilities for each market based on your knowledge.
+            # Build prompt based on calibration mode
+            if self.use_calibration_prompts:
+                # Use calibration-aware prompts for better probability accuracy
+                prompt = CALIBRATION_USER_PROMPT_TEMPLATE.format(
+                    event_info=event_info,
+                    markets_info=markets_info,
+                    trending_section=trending_section
+                )
+                system_prompt = CALIBRATION_SYSTEM_PROMPT
+            else:
+                # Legacy prompt (for A/B testing or fallback)
+                prompt = f"""You are an expert prediction market analyst. Analyze this event and predict probabilities for each market based on your knowledge.
 
 {event_info}
 
@@ -197,23 +300,25 @@ IMPORTANT FORMATTING RULES:
 Example format:
 "KXMARKET-123: 65% probability - Based on current trends and historical patterns..."
 """
+                system_prompt = "You are an expert prediction market analyst. Provide accurate probability estimates based on logical analysis. Always be specific with probability percentages and include market tickers in your predictions."
 
             event_ticker = event.get('event_ticker', 'UNKNOWN')
-            logger.info(f"Researching event {event_ticker} via OpenAI GPT-4o...")
+            prompt_mode = "calibration" if self.use_calibration_prompts else "legacy"
+            logger.info(f"Researching event {event_ticker} via OpenAI GPT-4o ({prompt_mode} prompts)...")
 
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert prediction market analyst. Provide accurate probability estimates based on logical analysis. Always be specific with probability percentages and include market tickers in your predictions."
+                        "content": system_prompt
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.3,
+                temperature=0.3,  # Lower temperature for more consistent, calibrated outputs
                 max_tokens=4096
             )
 

@@ -14,13 +14,13 @@ from loguru import logger
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.backends import default_backend
-from config import KalshiConfig
+from config import KalshiConfig, EarlyEntryConfig
 
 
 class KalshiClient:
     """Simple Kalshi API client for basic trading operations."""
-    
-    def __init__(self, config: KalshiConfig, minimum_time_remaining_hours: float = 1.0, max_markets_per_event: int = 10, max_close_ts: Optional[int] = None):
+
+    def __init__(self, config: KalshiConfig, minimum_time_remaining_hours: float = 1.0, max_markets_per_event: int = 10, max_close_ts: Optional[int] = None, early_entry_config: Optional[EarlyEntryConfig] = None):
         self.config = config
         self.base_url = config.base_url
         self.api_key = config.api_key
@@ -28,8 +28,68 @@ class KalshiClient:
         self.minimum_time_remaining_hours = minimum_time_remaining_hours
         self.max_markets_per_event = max_markets_per_event
         self.max_close_ts = max_close_ts
+        self.early_entry_config = early_entry_config
         self.client = None
         self.session_token = None
+
+    def calculate_early_entry_score(self, market: Dict[str, Any], event: Dict[str, Any]) -> float:
+        """
+        Calculate early entry opportunity score for a market.
+        Higher score = better early entry opportunity.
+
+        Scoring factors:
+        1. Recency: Newer markets (recently opened) score higher
+        2. Low volume: Lower 24h volume scores higher (less discovered)
+        3. Time remaining: More time until close scores higher (room to develop)
+        """
+        if not self.early_entry_config or not self.early_entry_config.enabled:
+            return 0.0
+
+        score = 0.0
+        config = self.early_entry_config
+
+        # 1. Recency score: newer markets score higher
+        open_time_str = market.get("open_time", "")
+        if open_time_str:
+            try:
+                # Parse ISO format datetime
+                if open_time_str.endswith("Z"):
+                    open_time_str = open_time_str[:-1] + "+00:00"
+                open_time = datetime.fromisoformat(open_time_str)
+                if open_time.tzinfo is None:
+                    open_time = open_time.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                age_hours = (now - open_time).total_seconds() / 3600
+
+                # Score: 1.0 if brand new, 0.0 if at max_market_age_hours
+                if age_hours <= config.max_market_age_hours:
+                    recency_score = max(0, 1 - (age_hours / config.max_market_age_hours))
+                else:
+                    recency_score = 0.0  # Too old, no score
+                score += recency_score * config.recency_weight
+            except (ValueError, TypeError):
+                pass  # Invalid date, skip recency scoring
+
+        # 2. Low volume score: lower volume scores higher
+        volume_24h = market.get("volume_24h", 0) or market.get("volume", 0) or 0
+        if volume_24h <= config.max_volume_24h:
+            # Score: 1.0 if zero volume, 0.0 if at max_volume_24h
+            volume_score = max(0, 1 - (volume_24h / config.max_volume_24h))
+        else:
+            volume_score = 0.0  # Too much volume, no score
+        score += volume_score * config.low_volume_weight
+
+        # 3. Time remaining score: more time scores higher
+        time_remaining_hours = event.get("time_remaining_hours", 0) or 0
+        if time_remaining_hours >= config.min_time_remaining_hours:
+            # Score: 0.0 at min, 1.0 at 7 days (168 hours)
+            max_time_for_max_score = 168.0  # 7 days
+            time_score = min(1, time_remaining_hours / max_time_for_max_score)
+        else:
+            time_score = 0.0  # Closing too soon, no score
+        score += time_score * config.time_remaining_weight
+
+        return score
         
     async def login(self):
         """Login to Kalshi API."""
@@ -164,9 +224,27 @@ class KalshiClient:
                     "total_markets": len(all_markets),  # Store original market count
                 })
             
-            # Sort by volume_24h (descending) for true popularity ranking
-            enriched_events.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
-            
+            # Sorting strategy: Early Entry (hybrid) or Legacy (volume-based)
+            if self.early_entry_config and self.early_entry_config.enabled:
+                # EARLY ENTRY MODE: Score events by recency + low volume + time remaining
+                for event in enriched_events:
+                    # Score each market in the event
+                    market_scores = []
+                    for market in event.get("markets", []):
+                        market["early_entry_score"] = self.calculate_early_entry_score(market, event)
+                        market_scores.append(market["early_entry_score"])
+
+                    # Event score = average of market scores (or 0 if no markets)
+                    event["early_entry_score"] = sum(market_scores) / len(market_scores) if market_scores else 0
+
+                # Sort by early entry score (highest = best early opportunity)
+                enriched_events.sort(key=lambda x: x.get("early_entry_score", 0), reverse=True)
+                logger.info(f"Early entry mode: sorted {len(enriched_events)} events by opportunity score")
+            else:
+                # LEGACY MODE: Sort by volume_24h (descending) for popularity ranking
+                enriched_events.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
+                logger.info(f"Legacy mode: sorted {len(enriched_events)} events by 24h volume")
+
             # Return only the top N events as requested
             top_events = enriched_events[:limit]
             

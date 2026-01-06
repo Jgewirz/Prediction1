@@ -28,6 +28,7 @@ class MessageType(str, Enum):
     ERROR = "error"
     CONNECTED = "connected"
     SUBSCRIBED = "subscribed"
+    WORKFLOW_STEP = "workflow_step"  # CLI workflow progress streaming
 
 
 @dataclass
@@ -66,6 +67,7 @@ class ConnectionManager:
             "kpis": set(),
             "alerts": set(),
             "status": set(),
+            "workflow": set(),  # CLI workflow step streaming
             "all": set()  # Subscribers to everything
         }
 
@@ -206,6 +208,14 @@ class ConnectionManager:
             data=status
         )
         return await self.broadcast(message, topic="status")
+
+    async def broadcast_workflow_step(self, step: Dict[str, Any]) -> int:
+        """Broadcast a workflow step update (CLI progress streaming)."""
+        message = WebSocketMessage(
+            type=MessageType.WORKFLOW_STEP,
+            data=step
+        )
+        return await self.broadcast(message, topic="workflow")
 
     async def send_heartbeat(self) -> None:
         """Send heartbeat to all connected clients."""

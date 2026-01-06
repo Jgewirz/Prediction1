@@ -65,10 +65,10 @@ function handleWsOpen() {
     state.reconnectAttempts = 0;
     updateConnectionStatus('connected');
 
-    // Subscribe to all topics
+    // Subscribe to all topics including workflow
     ws.send(JSON.stringify({
         action: 'subscribe',
-        topics: ['decisions', 'kpis', 'alerts', 'status']
+        topics: ['decisions', 'kpis', 'alerts', 'status', 'workflow', 'all']
     }));
 }
 
@@ -100,6 +100,10 @@ function handleWsMessage(event) {
 
             case 'status':
                 handleStatusUpdate(message.data);
+                break;
+
+            case 'workflow_step':
+                handleWorkflowStep(message.data);
                 break;
 
             case 'heartbeat':
@@ -261,6 +265,93 @@ function handleStatusUpdate(status) {
     if (status.mode) {
         updateModeDisplay(status.mode);
     }
+}
+
+function handleWorkflowStep(step) {
+    console.log('Workflow step received:', step);
+
+    const stepNumber = step.step_number;
+    const stepName = step.step_name;
+    const status = step.status;
+    const details = step.details || {};
+    const timestamp = step.timestamp;
+
+    // Update workflow status indicator
+    const workflowStatus = document.getElementById('workflow-status');
+    if (workflowStatus) {
+        if (status === 'running') {
+            workflowStatus.textContent = 'Running';
+            workflowStatus.className = 'workflow-status running';
+        } else if (stepNumber === 10 && status === 'completed') {
+            workflowStatus.textContent = 'Completed';
+            workflowStatus.className = 'workflow-status completed';
+        }
+    }
+
+    // Find the step element
+    const stepEl = document.querySelector(`.workflow-step[data-step="${stepNumber}"]`);
+    if (!stepEl) return;
+
+    // Update step class based on status
+    stepEl.classList.remove('pending', 'running', 'completed', 'failed', 'skipped');
+    stepEl.classList.add(status);
+
+    // Update step icon
+    const iconEl = stepEl.querySelector('.step-icon');
+    if (iconEl) {
+        const icons = {
+            'pending': '○',
+            'running': '▶',
+            'completed': '✓',
+            'failed': '✗',
+            'skipped': '–'
+        };
+        iconEl.textContent = icons[status] || '○';
+    }
+
+    // Update step name
+    const nameEl = stepEl.querySelector('.step-name');
+    if (nameEl) {
+        nameEl.textContent = stepName;
+    }
+
+    // Update step details
+    const detailsEl = stepEl.querySelector('.step-details');
+    if (detailsEl && Object.keys(details).length > 0) {
+        const detailParts = [];
+        for (const [key, value] of Object.entries(details)) {
+            const label = key.replace(/_/g, ' ');
+            detailParts.push(`${label}: ${value}`);
+        }
+        detailsEl.textContent = detailParts.join(' | ');
+    }
+
+    // Update timestamp
+    const tsEl = document.getElementById('workflow-timestamp');
+    if (tsEl && timestamp) {
+        const date = new Date(timestamp);
+        tsEl.textContent = `Last update: ${date.toLocaleTimeString()}`;
+    }
+
+    // If step 1 is running, reset all other steps to pending
+    if (stepNumber === 1 && status === 'running') {
+        resetWorkflowSteps();
+        // Re-apply running status to step 1
+        stepEl.classList.remove('pending');
+        stepEl.classList.add('running');
+        if (iconEl) iconEl.textContent = '▶';
+    }
+}
+
+function resetWorkflowSteps() {
+    document.querySelectorAll('.workflow-step').forEach(el => {
+        el.classList.remove('running', 'completed', 'failed', 'skipped');
+        el.classList.add('pending');
+        const icon = el.querySelector('.step-icon');
+        if (icon) icon.textContent = '○';
+        const details = el.querySelector('.step-details');
+        if (details) details.textContent = '';
+    });
 }
 
 function passesFilters(decision) {
