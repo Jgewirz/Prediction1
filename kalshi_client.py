@@ -37,10 +37,12 @@ class KalshiClient:
         Calculate early entry opportunity score for a market.
         Higher score = better early entry opportunity.
 
-        Scoring factors:
+        Scoring factors (like kalshi.com/?live=new&liveEventType=unique):
         1. Recency: Newer markets (recently opened) score higher
         2. Low volume: Lower 24h volume scores higher (less discovered)
         3. Time remaining: More time until close scores higher (room to develop)
+        4. BONUS: Unique events (non-series) get a score boost
+        5. BONUS: Newly created markets get a score boost
         """
         if not self.early_entry_config or not self.early_entry_config.enabled:
             return 0.0
@@ -49,7 +51,8 @@ class KalshiClient:
         config = self.early_entry_config
 
         # 1. Recency score: newer markets score higher
-        open_time_str = market.get("open_time", "")
+        open_time_str = market.get("open_time", "") or market.get("created_time", "")
+        market_age_hours = None
         if open_time_str:
             try:
                 # Parse ISO format datetime
@@ -59,11 +62,11 @@ class KalshiClient:
                 if open_time.tzinfo is None:
                     open_time = open_time.replace(tzinfo=timezone.utc)
                 now = datetime.now(timezone.utc)
-                age_hours = (now - open_time).total_seconds() / 3600
+                market_age_hours = (now - open_time).total_seconds() / 3600
 
                 # Score: 1.0 if brand new, 0.0 if at max_market_age_hours
-                if age_hours <= config.max_market_age_hours:
-                    recency_score = max(0, 1 - (age_hours / config.max_market_age_hours))
+                if market_age_hours <= config.max_market_age_hours:
+                    recency_score = max(0, 1 - (market_age_hours / config.max_market_age_hours))
                 else:
                     recency_score = 0.0  # Too old, no score
                 score += recency_score * config.recency_weight
@@ -89,7 +92,52 @@ class KalshiClient:
             time_score = 0.0  # Closing too soon, no score
         score += time_score * config.time_remaining_weight
 
+        # 4. BONUS: Unique event (non-series) - like liveEventType=unique
+        if config.favor_unique_events:
+            is_unique = self._is_unique_event(event)
+            if is_unique:
+                score += config.unique_event_bonus
+                market["is_unique_event"] = True
+
+        # 5. BONUS: Newly created market - like live=new
+        if config.favor_new_markets and market_age_hours is not None:
+            if market_age_hours <= config.new_market_hours:
+                score += config.new_market_bonus
+                market["is_new_market"] = True
+
         return score
+
+    def _is_unique_event(self, event: Dict[str, Any]) -> bool:
+        """
+        Determine if an event is unique (non-recurring) vs part of a series.
+
+        Unique events:
+        - Have no series_ticker, OR
+        - series_ticker equals event_ticker (standalone), OR
+        - Have no strike_period (not recurring)
+
+        Series/recurring events typically have:
+        - Different series_ticker than event_ticker
+        - A strike_period like 'day', 'week', 'month'
+        """
+        event_ticker = event.get("event_ticker", "")
+        series_ticker = event.get("series_ticker", "")
+        strike_period = event.get("strike_period", "")
+
+        # No series ticker = unique
+        if not series_ticker:
+            return True
+
+        # Series ticker matches event ticker = standalone/unique
+        if series_ticker == event_ticker:
+            return True
+
+        # No strike period = likely unique (not time-based recurring)
+        if not strike_period:
+            return True
+
+        # Has a different series ticker and a strike period = recurring series
+        return False
         
     async def login(self):
         """Login to Kalshi API."""
@@ -209,6 +257,7 @@ class KalshiClient:
 
                 enriched_events.append({
                     "event_ticker": event.get("event_ticker", ""),
+                    "series_ticker": event.get("series_ticker", ""),  # For unique event detection
                     "title": event.get("title", ""),
                     "subtitle": event.get("sub_title", ""),
                     "volume": total_volume,
@@ -226,20 +275,35 @@ class KalshiClient:
             
             # Sorting strategy: Early Entry (hybrid) or Legacy (volume-based)
             if self.early_entry_config and self.early_entry_config.enabled:
-                # EARLY ENTRY MODE: Score events by recency + low volume + time remaining
+                # EARLY ENTRY MODE: Score events by recency + low volume + time remaining + unique/new bonuses
+                unique_count = 0
+                new_market_count = 0
+
                 for event in enriched_events:
+                    # Check if event is unique
+                    is_unique = self._is_unique_event(event)
+                    event["is_unique_event"] = is_unique
+                    if is_unique:
+                        unique_count += 1
+
                     # Score each market in the event
                     market_scores = []
                     for market in event.get("markets", []):
                         market["early_entry_score"] = self.calculate_early_entry_score(market, event)
                         market_scores.append(market["early_entry_score"])
+                        if market.get("is_new_market"):
+                            new_market_count += 1
 
                     # Event score = average of market scores (or 0 if no markets)
                     event["early_entry_score"] = sum(market_scores) / len(market_scores) if market_scores else 0
 
                 # Sort by early entry score (highest = best early opportunity)
                 enriched_events.sort(key=lambda x: x.get("early_entry_score", 0), reverse=True)
-                logger.info(f"Early entry mode: sorted {len(enriched_events)} events by opportunity score")
+                logger.info(
+                    f"Early entry mode (live=new, liveEventType=unique): "
+                    f"sorted {len(enriched_events)} events | "
+                    f"{unique_count} unique events | {new_market_count} new markets"
+                )
             else:
                 # LEGACY MODE: Sort by volume_24h (descending) for popularity ranking
                 enriched_events.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)

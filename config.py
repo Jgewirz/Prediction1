@@ -171,7 +171,10 @@ class StopLossConfig(BaseModel):
 
 
 class EarlyEntryConfig(BaseModel):
-    """Early entry event selection strategy - prioritize new, low-volume opportunities."""
+    """Early entry event selection strategy - prioritize new, low-volume, unique opportunities.
+
+    Designed to match kalshi.com/?live=new&liveEventType=unique behavior.
+    """
     enabled: bool = Field(default=True, description="Enable early entry selection strategy")
 
     # Market age filters
@@ -180,6 +183,13 @@ class EarlyEntryConfig(BaseModel):
 
     # Volume filters
     max_volume_24h: int = Field(default=10000, ge=100, le=1000000, description="Maximum 24h volume to consider (lower = earlier opportunities)")
+
+    # NEW/UNIQUE event filters (like kalshi.com/?live=new&liveEventType=unique)
+    favor_unique_events: bool = Field(default=True, description="Prioritize unique/non-recurring events over series")
+    favor_new_markets: bool = Field(default=True, description="Prioritize recently created markets")
+    new_market_hours: float = Field(default=24.0, ge=1.0, le=168.0, description="Markets created within this window are 'new'")
+    unique_event_bonus: float = Field(default=0.25, ge=0.0, le=0.5, description="Score bonus for unique (non-series) events")
+    new_market_bonus: float = Field(default=0.15, ge=0.0, le=0.5, description="Score bonus for newly created markets")
 
     # Scoring weights (must sum to 1.0 for normalized scoring)
     recency_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Weight for market recency (newer = higher score)")
