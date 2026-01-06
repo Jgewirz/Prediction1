@@ -28,6 +28,7 @@ from db.database import close_database
 from db.postgres import close_postgres_database
 from db.queries import Queries
 from calibration_tracker import CalibrationCurve, get_calibration_curve
+from dashboard.broadcaster import broadcast_decision, broadcast_kpi_update, broadcast_alert, broadcast_status
 import openai
 import uuid
 
@@ -882,9 +883,9 @@ class SimpleTradingBot:
                     'no_mid_price': market.get('no_mid_price', 0)
                 })
             
-            # Create prompt for probability extraction with anti-hallucination constraints
+            # Create prompt for probability extraction with calibration-aware constraints
             prompt = f"""
-            Based on the following deep research, extract the probability estimates for each market.
+            Based on the following deep research, extract CALIBRATED probability estimates for each market.
 
             Event: {event_info.get('title', event_ticker)}
 
@@ -894,31 +895,49 @@ class SimpleTradingBot:
             Research Results:
             {research_text}
 
-            CRITICAL CONSTRAINTS - FOLLOW EXACTLY:
+            EXTRACTION RULES (FOLLOW EXACTLY):
             1. If research provides EXPLICIT probability estimates (percentages, odds), USE THOSE EXACT VALUES
             2. If research provides ranges (e.g., "60-70%"), use the MIDPOINT
             3. If research has NO quantitative probability data for a market, set confidence=0.2 (very low)
             4. DO NOT invent or guess probabilities - only extract what the research explicitly supports
             5. Include direct quotes or citations from the research to justify each probability
-            6. Higher confidence (0.7-1.0) ONLY if research has explicit numerical probability data
-            7. Medium confidence (0.4-0.6) if research has strong qualitative indicators but no numbers
-            8. Low confidence (0.2-0.3) if research is vague or lacks specific data for that market
+
+            CALIBRATION-AWARE CONFIDENCE SCORING:
+            - confidence 0.8-1.0: Research has explicit numerical probabilities with clear justification
+            - confidence 0.6-0.7: Research has strong qualitative indicators pointing to specific outcome
+            - confidence 0.4-0.5: Research has moderate evidence but some uncertainty acknowledged
+            - confidence 0.2-0.3: Research is vague, conflicting signals, or lacks specific data
+
+            OVERCONFIDENCE CHECKS:
+            - Does the research acknowledge uncertainty? Higher confidence if yes.
+            - Are there counterarguments mentioned? Reduce confidence if ignored.
+            - Is the probability near 50%? Require MORE evidence for high confidence.
+            - Is the probability extreme (>80% or <20%)? Require STRONGEST evidence.
 
             For each market, provide:
             1. research_probability: The probability (0-100%) - must be justified by research
-            2. reasoning: Must include direct evidence/quotes from the research
-            3. confidence: 0-1 based on quality of research data (see rules above)
+            2. reasoning: Must include direct evidence/quotes AND uncertainty factors
+            3. confidence: 0-1 based on calibration rules above
 
-            Focus on extracting concrete probability estimates from the research, not market prices.
+            IMPORTANT: Extreme probabilities (>85% or <15%) require explicit, verifiable evidence.
+            Default to more moderate estimates when evidence is circumstantial.
             """
-            
+
+            # Calibration-aware system prompt
+            system_prompt = (
+                "You are a calibrated prediction market analyst. Your probability extractions are "
+                "tracked for accuracy over time. Extract probabilities conservatively - only claim "
+                "high confidence when research provides explicit numerical estimates. When uncertain, "
+                "use confidence < 0.5 and keep probabilities closer to 50%."
+            )
+
             # Use Responses API structured outputs
             from openai_utils import responses_parse_pydantic
             extraction = await responses_parse_pydantic(
                 self.openai_client,
                 model=self.config.openai.model if self.config.openai.model else "gpt-5",
                 messages=[
-                    {"role": "system", "content": "You are a professional prediction market analyst. Extract probability estimates from research with structured output."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 response_format=ProbabilityExtraction,
@@ -2352,6 +2371,33 @@ class SimpleTradingBot:
                 market_odds=market_odds,
                 event_markets=event_markets
             )
+
+            # Broadcast decisions to dashboard for real-time updates
+            if decisions_saved > 0:
+                logger.info(f"Broadcasting {decisions_saved} decisions to dashboard")
+                for decision in analysis.decisions:
+                    market_data = market_odds.get(decision.ticker, {})
+                    await broadcast_decision({
+                        "decision_id": f"{decision.ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        "timestamp": datetime.now().isoformat(),
+                        "market_ticker": decision.ticker,
+                        "market_title": decision.market_name or "",
+                        "event_title": decision.event_name or "",
+                        "action": decision.action,
+                        "bet_amount": decision.amount,
+                        "confidence": decision.confidence,
+                        "r_score": decision.r_score,
+                        "kelly_fraction": decision.kelly_fraction,
+                        "expected_return": decision.expected_return,
+                        "research_probability": decision.research_probability,
+                        "market_price": decision.market_price,
+                        "reasoning": decision.reasoning[:200] if decision.reasoning else "",
+                        "run_mode": "live" if not self.config.dry_run else "dry_run",
+                        "signal_applied": getattr(decision, 'signal_applied', False),
+                        "signal_direction": getattr(decision, 'signal_direction', None),
+                    })
+                # Trigger KPI recalculation on dashboard
+                await broadcast_kpi_update()
 
             await self.place_bets(analysis, market_odds, probability_extractions)
 

@@ -578,6 +578,79 @@ async def health_check():
         }
 
 
+@app.get("/api/freshness")
+async def get_data_freshness():
+    """
+    Check data freshness - helps verify 15-min schedule is working.
+
+    Returns information about the most recent decision and run,
+    and whether data is considered stale (>20 minutes old).
+    """
+    try:
+        db = await get_db()
+
+        # Get most recent decision
+        last_decision = await db.fetchone(
+            "SELECT timestamp, run_id, market_ticker, action FROM betting_decisions ORDER BY timestamp DESC LIMIT 1"
+        )
+
+        # Get most recent run
+        last_run = await db.fetchone(
+            "SELECT run_id, started_at, completed_at, status FROM run_history ORDER BY started_at DESC LIMIT 1"
+        )
+
+        now = datetime.utcnow()
+        last_decision_age_seconds = None
+        last_run_age_seconds = None
+
+        if last_decision and last_decision.get('timestamp'):
+            last_ts = last_decision['timestamp']
+            if isinstance(last_ts, str):
+                last_ts = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+            if last_ts.tzinfo is not None:
+                last_ts = last_ts.replace(tzinfo=None)
+            last_decision_age_seconds = (now - last_ts).total_seconds()
+
+        if last_run and last_run.get('started_at'):
+            run_ts = last_run['started_at']
+            if isinstance(run_ts, str):
+                run_ts = datetime.fromisoformat(run_ts.replace('Z', '+00:00'))
+            if run_ts.tzinfo is not None:
+                run_ts = run_ts.replace(tzinfo=None)
+            last_run_age_seconds = (now - run_ts).total_seconds()
+
+        # Stale if no decisions or >20 minutes since last decision
+        is_stale = last_decision_age_seconds is None or last_decision_age_seconds > 20 * 60
+
+        return {
+            "status": "fresh" if not is_stale else "stale",
+            "last_decision": {
+                "timestamp": str(last_decision['timestamp']) if last_decision and last_decision.get('timestamp') else None,
+                "age_seconds": round(last_decision_age_seconds, 1) if last_decision_age_seconds else None,
+                "age_minutes": round(last_decision_age_seconds / 60, 1) if last_decision_age_seconds else None,
+                "market_ticker": last_decision.get('market_ticker') if last_decision else None,
+                "action": last_decision.get('action') if last_decision else None,
+            } if last_decision else None,
+            "last_run": {
+                "run_id": last_run.get('run_id') if last_run else None,
+                "started_at": str(last_run.get('started_at')) if last_run else None,
+                "status": last_run.get('status') if last_run else None,
+                "age_seconds": round(last_run_age_seconds, 1) if last_run_age_seconds else None,
+            } if last_run else None,
+            "is_stale": is_stale,
+            "expected_interval_minutes": 15,
+            "stale_threshold_minutes": 20,
+            "checked_at": now.isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "is_stale": True,
+            "checked_at": datetime.utcnow().isoformat()
+        }
+
+
 # === WebSocket Endpoints ===
 
 @app.websocket("/ws/live")

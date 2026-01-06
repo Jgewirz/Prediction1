@@ -13,12 +13,14 @@ Usage in trading_bot.py:
     # On important events
     await broadcast_alert("Daily loss limit reached!", severity="critical")
 """
+import os
 import httpx
 from typing import Dict, Any, Optional
 from loguru import logger
 
-# Dashboard API URL (configurable)
-DASHBOARD_API_URL = "http://localhost:8000"
+# Dashboard API URL - configurable via environment variable for Render deployment
+# Set DASHBOARD_URL to the Render web service URL (e.g., https://kalshi-trading-bot-le8x.onrender.com)
+DASHBOARD_API_URL = os.getenv("DASHBOARD_URL", "http://localhost:8000")
 
 
 async def broadcast_decision(decision: Dict[str, Any], base_url: str = DASHBOARD_API_URL) -> bool:

@@ -18,6 +18,7 @@ from trading_bot import SimpleTradingBot
 from reconciliation import run_reconciliation
 from config import load_config
 from position_monitor import PositionMonitor, create_position_monitor
+from dashboard.broadcaster import broadcast_status, broadcast_alert, broadcast_kpi_update
 
 
 class ContinuousTradingBot:
@@ -49,6 +50,17 @@ class ContinuousTradingBot:
 
         logger.info(f"=== Starting trading run #{self.total_runs} ===")
 
+        # Broadcast status: trading run starting
+        await broadcast_status(
+            bot_running=True,
+            mode='live' if self.live_trading else 'dry_run',
+            additional_info={
+                'run_number': self.total_runs,
+                'run_start': run_start.isoformat(),
+                'status': 'running'
+            }
+        )
+
         try:
             bot = SimpleTradingBot(live_trading=self.live_trading)
             await bot.run()
@@ -74,14 +86,46 @@ class ContinuousTradingBot:
             logger.info(f"Trading run #{self.total_runs} completed in {duration:.1f}s")
             self.console.print(f"\n[green]Trading run #{self.total_runs} completed in {duration:.1f}s[/green]")
 
+            # Broadcast status: run completed successfully
+            await broadcast_status(
+                bot_running=True,
+                mode='live' if self.live_trading else 'dry_run',
+                additional_info={
+                    'run_number': self.total_runs,
+                    'last_run_completed': self.last_run_time.isoformat(),
+                    'duration_seconds': duration,
+                    'status': 'idle',
+                    'successful_runs': self.successful_runs
+                }
+            )
+            # Update KPIs after successful run
+            await broadcast_kpi_update()
+
         except Exception as e:
             self.consecutive_failures += 1
             logger.error(f"Trading run failed (failure #{self.consecutive_failures}): {e}")
             self.console.print(f"\n[red]Trading run #{self.total_runs} failed: {e}[/red]")
 
+            # Broadcast alert on failure
+            await broadcast_alert(
+                message=f"Trading run #{self.total_runs} failed: {str(e)[:100]}",
+                severity="error",
+                details={
+                    'run_number': self.total_runs,
+                    'consecutive_failures': self.consecutive_failures,
+                    'error': str(e)
+                }
+            )
+
             if self.consecutive_failures >= self.config.scheduler.max_consecutive_failures:
                 logger.critical("Max consecutive failures reached, pausing trading")
                 self.console.print(f"[bold red]CRITICAL: {self.consecutive_failures} consecutive failures - trading paused[/bold red]")
+                # Broadcast critical alert
+                await broadcast_alert(
+                    message=f"CRITICAL: {self.consecutive_failures} consecutive failures - trading paused",
+                    severity="critical",
+                    details={'consecutive_failures': self.consecutive_failures}
+                )
 
         # Show next scheduled run
         next_run = self.scheduler.get_job('trading')
