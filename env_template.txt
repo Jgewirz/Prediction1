@@ -39,12 +39,16 @@ OPENAI_MODEL=gpt-5
 # Market processing limits
 MAX_BET_AMOUNT=25.0
 
-# Event analysis configuration
-MAX_EVENTS_TO_ANALYZE=50      # Number of top events to analyze by 24h volume
-RESEARCH_BATCH_SIZE=10        # Number of parallel deep research requests (1-20 recommended)
-SKIP_EXISTING_POSITIONS=true # Skip betting on markets where we already have positions
-MINIMUM_TIME_REMAINING_HOURS=1.0  # Minimum hours remaining before event strike to consider it tradeable (only applied to events with strike_date)
-MAX_MARKETS_PER_EVENT=10     # Maximum number of markets per event to analyze (selects top N markets by volume)
+# Event analysis configuration - EXPANDED for more opportunity coverage
+MAX_EVENTS_TO_ANALYZE=100     # INCREASED from 50 to 100 for broader coverage
+RESEARCH_BATCH_SIZE=15        # INCREASED for faster parallel processing
+SKIP_EXISTING_POSITIONS=true  # Skip betting on markets where we already have positions
+SKIP_RECENTLY_ANALYZED_HOURS=2.0  # Skip markets analyzed in last 2h to get diverse opportunities (0=disabled)
+MINIMUM_TIME_REMAINING_HOURS=0.5  # LOWERED to 30min for very short-term opportunities
+MAX_MARKETS_PER_EVENT=20      # INCREASED from 10 to 20 for deeper event coverage
+
+# Scheduler - Run interval
+SCHEDULER_TRADING_INTERVAL=5  # Run every 5 minutes (was 15)
 MINIMUM_ALPHA_THRESHOLD=2.0  # Minimum alpha threshold for betting (research_price / market_price must be >= this value)
 
 # Risk management / hedging configuration
@@ -114,20 +118,21 @@ DB_MIGRATE_ON_STARTUP=true
 AUTO_RECONCILE=true
 
 # =============================================================================
-# RISK MANAGEMENT & KELLY SIZING
+# RISK MANAGEMENT & KELLY SIZING (CALIBRATED FOR AGGRESSIVE OPPORTUNITY CAPTURE)
 # =============================================================================
 
 # R-score filtering (z-score threshold for placing bets)
-Z_THRESHOLD=1.5
+# LOWERED from 1.5 to 0.6 to capture more profitable opportunities
+Z_THRESHOLD=0.6
 
 # Kelly criterion sizing
 ENABLE_KELLY_SIZING=true
-KELLY_FRACTION=0.5
-MAX_KELLY_BET_FRACTION=0.1
+KELLY_FRACTION=0.65              # Moderate aggression for balanced growth
+MAX_KELLY_BET_FRACTION=0.15      # Allow larger position sizes
 BANKROLL=1000.0
 
-# Portfolio management
-MAX_PORTFOLIO_POSITIONS=10
+# Portfolio management - EXPANDED for more diversification
+MAX_PORTFOLIO_POSITIONS=35       # Increased from 10 to 35
 PORTFOLIO_SELECTION_METHOD=top_r_scores
 
 # Daily loss limits (kill switch)
@@ -135,6 +140,20 @@ MAX_DAILY_LOSS=100.0
 MAX_DAILY_LOSS_PCT=0.10
 ENABLE_KILL_SWITCH=true
 MAX_TOTAL_EXPOSURE=500.0
+
+# =============================================================================
+# EARLY ENTRY STRATEGY (kalshi.com/?live=new&liveEventType=unique behavior)
+# =============================================================================
+
+EARLY_ENTRY_ENABLED=true
+EARLY_ENTRY_MAX_AGE_HOURS=72.0     # Markets up to 72h old (was 48h)
+EARLY_ENTRY_MIN_TIME_HOURS=6.0    # Capture short-term opportunities (was 24h)
+EARLY_ENTRY_MAX_VOLUME=75000      # Include moderately liquid markets (was 10k)
+
+# Scoring weights (must sum to 1.0) - prioritize short-term resolution
+EARLY_ENTRY_RECENCY_WEIGHT=0.35   # Favor newer markets
+EARLY_ENTRY_VOLUME_WEIGHT=0.25    # Slightly favor lower volume (less efficient)
+EARLY_ENTRY_TIME_WEIGHT=0.40      # PRIORITIZE short-term markets for faster turnover
 
 # =============================================================================
 # TRENDRADAR NEWS INTELLIGENCE (Optional)
