@@ -82,12 +82,16 @@ class KalshiClient:
             volume_score = 0.0  # Too much volume, no score
         score += volume_score * config.low_volume_weight
 
-        # 3. Time remaining score: more time scores higher
+        # 3. Time remaining score: INVERTED - shorter time = higher score (faster resolution = more edge)
+        # Short-term markets (6-48h) often have the highest mispricing and fastest capital turnover
         time_remaining_hours = event.get("time_remaining_hours", 0) or 0
         if time_remaining_hours >= config.min_time_remaining_hours:
-            # Score: 0.0 at min, 1.0 at 7 days (168 hours)
-            max_time_for_max_score = 168.0  # 7 days
-            time_score = min(1, time_remaining_hours / max_time_for_max_score)
+            # INVERTED: Score 1.0 at min_time (6h), decaying to 0.2 at 168h (7 days)
+            # Formula: 1.0 - 0.8 * (time_hours - min) / (168 - min)
+            min_time = config.min_time_remaining_hours
+            max_time_for_scoring = 168.0  # 7 days
+            normalized_time = (time_remaining_hours - min_time) / (max_time_for_scoring - min_time)
+            time_score = max(0.2, 1.0 - 0.8 * min(1.0, normalized_time))  # Range: 0.2 to 1.0
         else:
             time_score = 0.0  # Closing too soon, no score
         score += time_score * config.time_remaining_weight

@@ -174,15 +174,16 @@ class EarlyEntryConfig(BaseModel):
     """Early entry event selection strategy - prioritize new, low-volume, unique opportunities.
 
     Designed to match kalshi.com/?live=new&liveEventType=unique behavior.
+    Calibrated aggressively to capture more profitable market inefficiencies.
     """
     enabled: bool = Field(default=True, description="Enable early entry selection strategy")
 
-    # Market age filters
-    max_market_age_hours: float = Field(default=48.0, ge=1.0, le=168.0, description="Maximum market age in hours (only consider markets opened within this window)")
-    min_time_remaining_hours: float = Field(default=24.0, ge=1.0, le=720.0, description="Minimum hours until market close (skip markets closing too soon)")
+    # Market age filters - EXPANDED for more opportunities
+    max_market_age_hours: float = Field(default=72.0, ge=1.0, le=168.0, description="Maximum market age in hours - expanded to 72h for more opportunities")
+    min_time_remaining_hours: float = Field(default=6.0, ge=1.0, le=720.0, description="Minimum hours until market close - lowered to 6h for short-term opportunities")
 
-    # Volume filters
-    max_volume_24h: int = Field(default=10000, ge=100, le=1000000, description="Maximum 24h volume to consider (lower = earlier opportunities)")
+    # Volume filters - EXPANDED to include moderately liquid markets
+    max_volume_24h: int = Field(default=75000, ge=100, le=1000000, description="Maximum 24h volume - increased to 75k for moderately liquid markets with mispricing")
 
     # NEW/UNIQUE event filters (like kalshi.com/?live=new&liveEventType=unique)
     favor_unique_events: bool = Field(default=True, description="Prioritize unique/non-recurring events over series")
@@ -192,9 +193,10 @@ class EarlyEntryConfig(BaseModel):
     new_market_bonus: float = Field(default=0.15, ge=0.0, le=0.5, description="Score bonus for newly created markets")
 
     # Scoring weights (must sum to 1.0 for normalized scoring)
-    recency_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Weight for market recency (newer = higher score)")
-    low_volume_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for low volume (lower volume = higher score)")
-    time_remaining_weight: float = Field(default=0.3, ge=0.0, le=1.0, description="Weight for time remaining (more time = higher score)")
+    # Rebalanced: time_remaining > recency > volume (short-term opportunities with mispricing are most profitable)
+    recency_weight: float = Field(default=0.35, ge=0.0, le=1.0, description="Weight for market recency (newer = higher score)")
+    low_volume_weight: float = Field(default=0.25, ge=0.0, le=1.0, description="Weight for low volume (lower volume = higher score)")
+    time_remaining_weight: float = Field(default=0.40, ge=0.0, le=1.0, description="Weight for time remaining - prioritized for faster resolution and higher edge")
 
 
 def _clean_env_value(value: str) -> str:
@@ -219,27 +221,27 @@ class BotConfig(BaseSettings):
     # Bot settings
     dry_run: bool = Field(default=True, description="Run in dry-run mode (overridden by CLI)")
     max_bet_amount: float = Field(default=300.0, description="Maximum bet amount per market (increased for aggressive growth)")
-    max_events_to_analyze: int = Field(default=50, description="Number of top events to analyze by volume_24h")
+    max_events_to_analyze: int = Field(default=100, description="Number of top events to analyze - increased for more opportunity coverage")
     research_batch_size: int = Field(default=10, description="Number of parallel deep research requests to batch")
     research_timeout_seconds: int = Field(default=900, description="Per-event research timeout in seconds")
     skip_existing_positions: bool = Field(default=True, description="Skip betting on markets where we already have positions")
     minimum_time_remaining_hours: float = Field(default=1.0, description="Minimum hours remaining before event strike to consider it tradeable (only applied to events with strike_date)")
-    max_markets_per_event: int = Field(default=10, description="Maximum number of markets per event to analyze (selects top N markets by volume)")
+    max_markets_per_event: int = Field(default=20, description="Maximum number of markets per event to analyze - increased for deeper event coverage")
     # Legacy alpha threshold (deprecated - use R-score filtering instead)
     minimum_alpha_threshold: float = Field(default=2.0, description="DEPRECATED: Use z_threshold and enable_r_score_filtering instead")
     
     # Risk-adjusted trading parameters (now the default system)
-    z_threshold: float = Field(default=0.8, description="Minimum R-score (z-score) threshold for placing bets - lowered for more opportunities")
+    z_threshold: float = Field(default=0.6, description="Minimum R-score (z-score) threshold for placing bets - aggressive for more opportunities")
     enable_r_score_filtering: bool = Field(default=True, description="DEPRECATED: R-score filtering is now always enabled")
     
     # Kelly criterion and position sizing
     enable_kelly_sizing: bool = Field(default=True, description="Use Kelly criterion for position sizing")
-    kelly_fraction: float = Field(default=0.8, ge=0.1, le=1.5, description="Fraction of Kelly to use (0.8 = near-full Kelly for max growth)")
+    kelly_fraction: float = Field(default=0.65, ge=0.1, le=1.5, description="Fraction of Kelly to use (0.65 = moderate aggression for balanced growth)")
     max_kelly_bet_fraction: float = Field(default=0.25, ge=0.01, le=0.5, description="Maximum fraction of bankroll per bet (25%)")
     bankroll: float = Field(default=1000.0, description="Total bankroll for Kelly sizing calculations")
     
     # Portfolio management
-    max_portfolio_positions: int = Field(default=25, description="Maximum number of positions to hold simultaneously")
+    max_portfolio_positions: int = Field(default=35, description="Maximum number of positions to hold simultaneously - increased for more diversification")
     portfolio_selection_method: str = Field(default="top_r_scores", description="Method for portfolio selection: 'top_r_scores', 'diversified', or 'legacy'")
     
     # Hedging settings
@@ -351,12 +353,12 @@ class BotConfig(BaseSettings):
 
         early_entry_config = EarlyEntryConfig(
             enabled=_clean_env_value(os.getenv("EARLY_ENTRY_ENABLED", "true")).lower() == "true",
-            max_market_age_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_AGE_HOURS", "48.0"))),
-            min_time_remaining_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MIN_TIME_HOURS", "24.0"))),
-            max_volume_24h=int(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_VOLUME", "10000"))),
-            recency_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_RECENCY_WEIGHT", "0.4"))),
-            low_volume_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_VOLUME_WEIGHT", "0.3"))),
-            time_remaining_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_TIME_WEIGHT", "0.3")))
+            max_market_age_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_AGE_HOURS", "72.0"))),
+            min_time_remaining_hours=float(_clean_env_value(os.getenv("EARLY_ENTRY_MIN_TIME_HOURS", "6.0"))),
+            max_volume_24h=int(_clean_env_value(os.getenv("EARLY_ENTRY_MAX_VOLUME", "75000"))),
+            recency_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_RECENCY_WEIGHT", "0.35"))),
+            low_volume_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_VOLUME_WEIGHT", "0.25"))),
+            time_remaining_weight=float(_clean_env_value(os.getenv("EARLY_ENTRY_TIME_WEIGHT", "0.40")))
         )
 
         data.update({
@@ -378,7 +380,7 @@ class BotConfig(BaseSettings):
             "max_markets_per_event": int(_clean_env_value(os.getenv("MAX_MARKETS_PER_EVENT", "10"))),
             "minimum_alpha_threshold": float(_clean_env_value(os.getenv("MINIMUM_ALPHA_THRESHOLD", "2.0"))),
             # Risk-adjusted trading parameters
-            "z_threshold": float(_clean_env_value(os.getenv("Z_THRESHOLD", "1.5"))),
+            "z_threshold": float(_clean_env_value(os.getenv("Z_THRESHOLD", "0.6"))),
             "enable_r_score_filtering": _clean_env_value(os.getenv("ENABLE_R_SCORE_FILTERING", "true")).lower() == "true",
             # Kelly criterion and position sizing
             "enable_kelly_sizing": _clean_env_value(os.getenv("ENABLE_KELLY_SIZING", "true")).lower() == "true",
@@ -386,7 +388,7 @@ class BotConfig(BaseSettings):
             "max_kelly_bet_fraction": float(_clean_env_value(os.getenv("MAX_KELLY_BET_FRACTION", "0.1"))),
             "bankroll": float(_clean_env_value(os.getenv("BANKROLL", "1000.0"))),
             # Portfolio management
-            "max_portfolio_positions": int(_clean_env_value(os.getenv("MAX_PORTFOLIO_POSITIONS", "10"))),
+            "max_portfolio_positions": int(_clean_env_value(os.getenv("MAX_PORTFOLIO_POSITIONS", "35"))),
             "portfolio_selection_method": os.getenv("PORTFOLIO_SELECTION_METHOD", "top_r_scores"),
             # Hedging settings
             "enable_hedging": _clean_env_value(os.getenv("ENABLE_HEDGING", "true")).lower() == "true",
