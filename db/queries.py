@@ -347,6 +347,20 @@ class Queries:
         WHERE status = 'pending'
     """
 
+    # Get markets analyzed in the last N hours to avoid duplicate analysis
+    GET_RECENTLY_ANALYZED_MARKETS = """
+        SELECT DISTINCT market_ticker
+        FROM betting_decisions
+        WHERE timestamp > NOW() - INTERVAL '{hours} hours'
+    """
+
+    # SQLite version (for backwards compatibility)
+    GET_RECENTLY_ANALYZED_MARKETS_SQLITE = """
+        SELECT DISTINCT market_ticker
+        FROM betting_decisions
+        WHERE timestamp > datetime('now', '-{hours} hours')
+    """
+
     GET_DECISION_COUNT_BY_STATUS = """
         SELECT status, COUNT(*) as count
         FROM betting_decisions

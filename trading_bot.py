@@ -682,6 +682,70 @@ class SimpleTradingBot:
 
         return filtered_event_markets
 
+    async def filter_recently_analyzed_markets(self, event_markets: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Filter out markets that were analyzed recently to get more diverse opportunities."""
+        cooldown_hours = self.config.skip_recently_analyzed_hours
+
+        if cooldown_hours <= 0 or not self.db:
+            # Disabled or no database
+            return event_markets
+
+        self.console.print(f"\n[bold]Step 2.6: Filtering recently analyzed markets (cooldown: {cooldown_hours}h)...[/bold]")
+
+        # Get recently analyzed markets from database
+        try:
+            # Use PostgreSQL interval syntax
+            query = f"""
+                SELECT DISTINCT market_ticker
+                FROM betting_decisions
+                WHERE timestamp > NOW() - INTERVAL '{int(cooldown_hours)} hours'
+            """
+            rows = await self.db.fetchall(query)
+            recently_analyzed = set(row['market_ticker'] for row in rows) if rows else set()
+
+            if recently_analyzed:
+                self.console.print(f"[blue]• Found {len(recently_analyzed)} markets analyzed in last {cooldown_hours}h[/blue]")
+            else:
+                self.console.print(f"[green][OK] No recent market analysis found (clean slate)[/green]")
+                return event_markets
+
+        except Exception as e:
+            logger.warning(f"Could not query recently analyzed markets: {e}")
+            return event_markets
+
+        # Filter markets
+        filtered_event_markets = {}
+        total_before = 0
+        total_after = 0
+        skipped = 0
+
+        for event_ticker, data in event_markets.items():
+            event = data['event']
+            markets = data['markets']
+            total_before += len(markets)
+
+            filtered_markets = []
+            for market in markets:
+                ticker = market.get('ticker', '')
+                if ticker in recently_analyzed:
+                    skipped += 1
+                else:
+                    filtered_markets.append(market)
+
+            if filtered_markets:
+                filtered_event_markets[event_ticker] = {
+                    'event': event,
+                    'markets': filtered_markets
+                }
+                total_after += len(filtered_markets)
+
+        self.console.print(f"[blue]• Markets before: {total_before}[/blue]")
+        self.console.print(f"[blue]• Markets skipped (recently analyzed): {skipped}[/blue]")
+        self.console.print(f"[blue]• Markets remaining (fresh): {total_after}[/blue]")
+        self.console.print(f"[green][OK] {len(filtered_event_markets)} events have fresh markets for analysis[/green]")
+
+        return filtered_event_markets
+
     async def fetch_trending_signals(self, event_markets: Dict[str, Dict[str, Any]]) -> Dict[str, List[TrendingSignal]]:
         """Fetch trending signals for all events from TrendRadar (Step 3.25)."""
         if not self.trendradar_client or not self.trendradar_client.enabled:
@@ -2401,7 +2465,17 @@ class SimpleTradingBot:
             if not event_markets:
                 self.console.print("[red]No markets remaining after position filtering. Exiting.[/red]")
                 return
-            
+
+            # Step 2.6: Filter recently analyzed markets to get diverse opportunities
+            markets_before_recent = sum(len(data['markets']) for data in event_markets.values())
+            event_markets = await self.filter_recently_analyzed_markets(event_markets)
+            markets_after_recent = sum(len(data['markets']) for data in event_markets.values())
+            if markets_before_recent != markets_after_recent:
+                self.console.print(f"[blue]• Filtered {markets_before_recent - markets_after_recent} recently analyzed markets for diversity[/blue]")
+            if not event_markets:
+                self.console.print("[yellow]No fresh markets remaining. Try running again later for new opportunities.[/yellow]")
+                return
+
             # Limit to max_events_to_analyze after position filtering
             if len(event_markets) > self.config.max_events_to_analyze:
                 # Sort filtered events by volume_24h and take top N

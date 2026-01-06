@@ -43,8 +43,12 @@ MAX_BET_AMOUNT=25.0
 MAX_EVENTS_TO_ANALYZE=100     # INCREASED from 50 to 100 for broader coverage
 RESEARCH_BATCH_SIZE=15        # INCREASED for faster parallel processing
 SKIP_EXISTING_POSITIONS=true  # Skip betting on markets where we already have positions
+SKIP_RECENTLY_ANALYZED_HOURS=2.0  # Skip markets analyzed in last 2h to get diverse opportunities (0=disabled)
 MINIMUM_TIME_REMAINING_HOURS=0.5  # LOWERED to 30min for very short-term opportunities
 MAX_MARKETS_PER_EVENT=20      # INCREASED from 10 to 20 for deeper event coverage
+
+# Scheduler - Run interval
+SCHEDULER_TRADING_INTERVAL=5  # Run every 5 minutes (was 15)
 MINIMUM_ALPHA_THRESHOLD=2.0  # Minimum alpha threshold for betting (research_price / market_price must be >= this value)
 
 # Risk management / hedging configuration

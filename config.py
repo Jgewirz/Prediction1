@@ -98,7 +98,7 @@ class DatabaseConfig(BaseModel):
 
 class SchedulerConfig(BaseModel):
     """Scheduler configuration for continuous operation."""
-    trading_interval_minutes: int = Field(default=15, ge=1, le=60, description="Minutes between trading runs")
+    trading_interval_minutes: int = Field(default=5, ge=1, le=60, description="Minutes between trading runs - reduced to 5 for faster opportunity capture")
     reconciliation_interval_minutes: int = Field(default=60, ge=15, le=240, description="Minutes between reconciliation")
     health_check_interval_minutes: int = Field(default=5, ge=1, le=15, description="Minutes between health checks")
     max_consecutive_failures: int = Field(default=5, ge=1, le=20, description="Max consecutive failures before pausing")
@@ -225,6 +225,7 @@ class BotConfig(BaseSettings):
     research_batch_size: int = Field(default=10, description="Number of parallel deep research requests to batch")
     research_timeout_seconds: int = Field(default=900, description="Per-event research timeout in seconds")
     skip_existing_positions: bool = Field(default=True, description="Skip betting on markets where we already have positions")
+    skip_recently_analyzed_hours: float = Field(default=2.0, description="Skip markets analyzed within this many hours to avoid duplicates (0 = disabled)")
     minimum_time_remaining_hours: float = Field(default=1.0, description="Minimum hours remaining before event strike to consider it tradeable (only applied to events with strike_date)")
     max_markets_per_event: int = Field(default=20, description="Maximum number of markets per event to analyze - increased for deeper event coverage")
     # Legacy alpha threshold (deprecated - use R-score filtering instead)
@@ -326,7 +327,7 @@ class BotConfig(BaseSettings):
         )
 
         scheduler_config = SchedulerConfig(
-            trading_interval_minutes=int(_clean_env_value(os.getenv("SCHEDULER_TRADING_INTERVAL", "15"))),
+            trading_interval_minutes=int(_clean_env_value(os.getenv("SCHEDULER_TRADING_INTERVAL", "5"))),
             reconciliation_interval_minutes=int(_clean_env_value(os.getenv("SCHEDULER_RECONCILIATION_INTERVAL", "60"))),
             health_check_interval_minutes=int(_clean_env_value(os.getenv("SCHEDULER_HEALTH_CHECK_INTERVAL", "5"))),
             max_consecutive_failures=int(_clean_env_value(os.getenv("SCHEDULER_MAX_FAILURES", "5"))),
@@ -376,6 +377,7 @@ class BotConfig(BaseSettings):
             "research_batch_size": int(_clean_env_value(os.getenv("RESEARCH_BATCH_SIZE", "10"))),
             "research_timeout_seconds": int(_clean_env_value(os.getenv("RESEARCH_TIMEOUT_SECONDS", "900"))),
             "skip_existing_positions": _clean_env_value(os.getenv("SKIP_EXISTING_POSITIONS", "true")).lower() == "true",
+            "skip_recently_analyzed_hours": float(_clean_env_value(os.getenv("SKIP_RECENTLY_ANALYZED_HOURS", "2.0"))),
             "minimum_time_remaining_hours": float(_clean_env_value(os.getenv("MINIMUM_TIME_REMAINING_HOURS", "1.0"))),
             "max_markets_per_event": int(_clean_env_value(os.getenv("MAX_MARKETS_PER_EVENT", "10"))),
             "minimum_alpha_threshold": float(_clean_env_value(os.getenv("MINIMUM_ALPHA_THRESHOLD", "2.0"))),
