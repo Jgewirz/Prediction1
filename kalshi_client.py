@@ -328,55 +328,78 @@ class KalshiClient:
             return []
     
     async def _fetch_all_events(self) -> List[Dict[str, Any]]:
-        """Fetch all events from the platform using pagination."""
+        """
+        Fetch all events from the platform using pagination.
+
+        Mimics kalshi.com/?live=new&liveEventType=unique behavior:
+        - Uses min_close_ts to focus on active markets (closing in next 30 days)
+        - Filters by status=open to get tradeable events
+        - Early entry scoring will later prioritize unique/new markets
+        """
         all_events = []
         cursor = None
         page = 1
-        
+
+        # Calculate min_close_ts for API filter: events with markets closing at least 1 hour from now
+        # This ensures we get active markets, not ones about to expire
+        now = datetime.now(timezone.utc)
+        min_close_ts = int((now.timestamp()))  # At least closing after now
+
+        # Log early entry mode if enabled
+        early_entry_mode = self.early_entry_config and self.early_entry_config.enabled
+        if early_entry_mode:
+            logger.info(
+                f"[EARLY ENTRY MODE] Fetching events like kalshi.com/?live=new&liveEventType=unique | "
+                f"Prioritizing: unique_events={self.early_entry_config.favor_unique_events}, "
+                f"new_markets={self.early_entry_config.favor_new_markets} "
+                f"(new_market_window={self.early_entry_config.new_market_hours}h)"
+            )
+
         while True:
             try:
                 headers = await self._get_headers("GET", "/trade-api/v2/events")
                 params = {
                     "limit": 100,  # Maximum events per page
                     "status": "open",  # Only get open events (active/tradeable)
-                    "with_nested_markets": "true"
+                    "with_nested_markets": "true",  # Include market data for scoring
+                    "min_close_ts": min_close_ts  # Focus on active markets (not expired)
                 }
-                
+
                 if cursor:
                     params["cursor"] = cursor
-                
-                logger.info(f"Fetching events page {page}...")
+
+                logger.info(f"Fetching events page {page}... (min_close_ts={min_close_ts})")
                 response = await self.client.get(
                     "/trade-api/v2/events",
                     headers=headers,
                     params=params
                 )
                 response.raise_for_status()
-                
+
                 data = response.json()
                 if data is None:
                     logger.error(f"Received None response from API")
                     break
-                    
+
                 events = data.get("events", []) if isinstance(data, dict) else []
-                
+
                 if not events:
                     break
-                
+
                 all_events.extend(events)
                 logger.info(f"Page {page}: {len(events)} events (total: {len(all_events)})")
-                
+
                 # Check if there's a next page
                 cursor = data.get("cursor")
                 if not cursor:
                     break
-                
+
                 page += 1
-                
+
             except Exception as e:
                 logger.error(f"Error fetching events page {page}: {e}")
                 break
-        
+
         logger.info(f"Fetched {len(all_events)} total events from {page} pages")
         return all_events
     

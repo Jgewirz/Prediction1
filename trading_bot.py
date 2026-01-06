@@ -2281,8 +2281,22 @@ class SimpleTradingBot:
                 'confidence_boost': getattr(decision, 'confidence_boost', 0.0),
                 'kelly_multiplier': getattr(decision, 'kelly_multiplier', 1.0),
                 'override_skip_triggered': getattr(decision, 'override_skip_triggered', False),
-                'signal_reasoning': getattr(decision, 'signal_reasoning', None)
+                'signal_reasoning': getattr(decision, 'signal_reasoning', None),
+                # Early entry strategy (like kalshi.com/?live=new&liveEventType=unique)
+                'is_unique_event': False,  # Will be populated below
+                'is_new_market': False,    # Will be populated below
+                'early_entry_score': 0.0   # Will be populated below
             }
+
+            # Get early entry flags from event_markets
+            for evt_ticker, data in event_markets.items():
+                event = data.get('event', {})
+                for market in data.get('markets', []):
+                    if market.get('ticker') == decision.ticker:
+                        decision_record['is_unique_event'] = event.get('is_unique_event', False)
+                        decision_record['is_new_market'] = market.get('is_new_market', False)
+                        decision_record['early_entry_score'] = market.get('early_entry_score', 0.0)
+                        break
 
             decisions_to_save.append(decision_record)
             logger.debug(f"Prepared decision record for {decision.ticker}")
@@ -2325,13 +2339,40 @@ class SimpleTradingBot:
                 return
 
             # Execute the main workflow
-            # Step 1: Fetch events
+            # Step 1: Fetch events (like kalshi.com/?live=new&liveEventType=unique)
             await broadcast_workflow_step(1, "Fetching events", "running",
-                "Querying Kalshi API for early entry opportunities")
+                "Querying Kalshi API for early entry opportunities (new/unique)")
             events = await self.get_top_events()
             early_entry_enabled = self.config.early_entry.enabled if hasattr(self.config, 'early_entry') else False
+
+            # Count unique events and new markets for dashboard visibility
+            unique_events = sum(1 for e in events if e.get("is_unique_event", False))
+            new_markets = sum(
+                sum(1 for m in e.get("markets", []) if m.get("is_new_market", False))
+                for e in events
+            )
+            avg_early_score = (
+                sum(e.get("early_entry_score", 0) for e in events) / len(events)
+                if events else 0
+            )
+
             await broadcast_workflow_step(1, "Fetching events", "completed",
-                details={"events_found": len(events), "early_entry_mode": early_entry_enabled})
+                details={
+                    "events_found": len(events),
+                    "early_entry_mode": early_entry_enabled,
+                    "unique_events": unique_events,
+                    "new_markets": new_markets,
+                    "avg_early_score": round(avg_early_score, 3)
+                })
+
+            # Log early entry summary
+            if early_entry_enabled:
+                self.console.print(
+                    f"[blue]Early Entry Mode:[/blue] {len(events)} events | "
+                    f"{unique_events} unique | {new_markets} new markets | "
+                    f"avg_score={avg_early_score:.3f}"
+                )
+
             if not events:
                 await broadcast_workflow_step(1, "Fetching events", "failed", "No events found")
                 self.console.print("[red]No events found. Exiting.[/red]")
@@ -2457,6 +2498,21 @@ class SimpleTradingBot:
                 logger.info(f"Broadcasting {decisions_saved} decisions to dashboard")
                 for decision in analysis.decisions:
                     market_data = market_odds.get(decision.ticker, {})
+
+                    # Get early entry flags from event_markets
+                    is_unique_event = False
+                    is_new_market = False
+                    early_entry_score = 0.0
+                    for event_ticker, data in event_markets.items():
+                        event = data.get('event', {})
+                        if event.get('is_unique_event'):
+                            is_unique_event = True
+                        for market in data.get('markets', []):
+                            if market.get('ticker') == decision.ticker:
+                                is_new_market = market.get('is_new_market', False)
+                                early_entry_score = market.get('early_entry_score', 0.0)
+                                break
+
                     await broadcast_decision({
                         "decision_id": f"{decision.ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                         "timestamp": datetime.now().isoformat(),
@@ -2475,6 +2531,10 @@ class SimpleTradingBot:
                         "run_mode": "live" if not self.config.dry_run else "dry_run",
                         "signal_applied": getattr(decision, 'signal_applied', False),
                         "signal_direction": getattr(decision, 'signal_direction', None),
+                        # Early entry flags (like kalshi.com/?live=new&liveEventType=unique)
+                        "is_unique_event": is_unique_event,
+                        "is_new_market": is_new_market,
+                        "early_entry_score": early_entry_score,
                     })
                 # Trigger KPI recalculation on dashboard
                 await broadcast_kpi_update()

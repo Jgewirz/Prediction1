@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS betting_decisions (
     override_skip_triggered INTEGER DEFAULT 0,  -- 1 if skip was overridden
     signal_reasoning TEXT,                  -- Explanation of signal impact
 
+    -- Early entry strategy (like kalshi.com/?live=new&liveEventType=unique)
+    is_unique_event INTEGER DEFAULT 0,      -- 1 if event is unique (non-series)
+    is_new_market INTEGER DEFAULT 0,        -- 1 if market was recently created
+    early_entry_score REAL DEFAULT 0,       -- Combined early entry opportunity score
+
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
