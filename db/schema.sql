@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS betting_decisions (
     confidence REAL,
     reasoning TEXT,
 
-    -- Research data (0-100 scale)
+    -- Research data (0-1 scale, normalized from LLM 0-100% output)
     research_probability REAL,
     research_reasoning TEXT,
     research_summary TEXT,

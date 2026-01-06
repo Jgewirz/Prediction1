@@ -1605,17 +1605,42 @@ class SimpleTradingBot:
         validated_decisions = []
         
         for decision in analysis.decisions:
-            if decision.action == "skip":
-                validated_decisions.append(decision)
-                continue
-            
-            # Find the market probability for this decision
+            # Find the market probability for this decision (always needed for skip decisions too)
             market_prob = None
             for market_data in probability_extraction.markets:
                 if market_data.ticker == decision.ticker:
                     market_prob = market_data.research_probability
                     break
-            
+
+            # Find current market price from market_odds dictionary
+            market_odds_data = None
+            if decision.ticker in market_odds:
+                ticker_odds = market_odds[decision.ticker]
+                # For skips, use yes_ask as default market price
+                action_for_price = decision.action if decision.action in ["buy_yes", "buy_no"] else "buy_yes"
+                if action_for_price == "buy_yes":
+                    market_odds_data = ticker_odds.get('yes_ask', 0) / 100.0  # Convert to probability
+                elif action_for_price == "buy_no":
+                    market_odds_data = ticker_odds.get('no_ask', 0) / 100.0  # Convert to probability
+
+            # Convert probabilities to 0-1 range for calculations
+            research_prob = market_prob / 100.0 if market_prob is not None else None
+
+            # If decision was already skip from GPT, still enrich with metrics for dashboard visibility
+            if decision.action == "skip":
+                # Enrich skip decisions with metrics where possible
+                if research_prob is not None and market_odds_data is not None and market_odds_data > 0:
+                    risk_metrics = self.calculate_risk_adjusted_metrics(
+                        research_prob, market_odds_data, "buy_yes"  # Use buy_yes for skip metric calc
+                    )
+                    decision.r_score = risk_metrics["r_score"]
+                    decision.kelly_fraction = risk_metrics["kelly_fraction"]
+                    decision.expected_return = risk_metrics["expected_return"]
+                    decision.market_price = market_odds_data
+                    decision.research_probability = research_prob
+                validated_decisions.append(decision)
+                continue
+
             if market_prob is None:
                 # If we can't find probability data, skip the bet
                 skip_decision = BettingDecision(
@@ -1629,16 +1654,15 @@ class SimpleTradingBot:
                 )
                 validated_decisions.append(skip_decision)
                 continue
-            
-            # Find current market price from market_odds dictionary
-            market_odds_data = None
+
+            # Re-calculate market_odds_data for the actual action (buy_yes vs buy_no)
             if decision.ticker in market_odds:
                 ticker_odds = market_odds[decision.ticker]
                 if decision.action == "buy_yes":
-                    market_odds_data = ticker_odds.get('yes_ask', 0) / 100.0  # Convert to probability
+                    market_odds_data = ticker_odds.get('yes_ask', 0) / 100.0
                 elif decision.action == "buy_no":
-                    market_odds_data = ticker_odds.get('no_ask', 0) / 100.0  # Convert to probability
-            
+                    market_odds_data = ticker_odds.get('no_ask', 0) / 100.0
+
             if market_odds_data is None or market_odds_data == 0:
                 # If we can't find market odds, skip the bet
                 skip_decision = BettingDecision(
@@ -1648,15 +1672,13 @@ class SimpleTradingBot:
                     amount=0.0,
                     reasoning=f"Skipped due to missing market odds",
                     event_name=decision.event_name,
-                    market_name=decision.market_name
+                    market_name=decision.market_name,
+                    research_probability=research_prob  # Include research prob even for skips
                 )
                 validated_decisions.append(skip_decision)
                 continue
-            
-            # Convert probabilities to 0-1 range
-            research_prob = market_prob / 100.0
-            
-            # Calculate risk-adjusted metrics
+
+            # Calculate risk-adjusted metrics (research_prob already calculated above)
             risk_metrics = self.calculate_risk_adjusted_metrics(
                 research_prob, market_odds_data, decision.action
             )
@@ -1949,11 +1971,12 @@ class SimpleTradingBot:
             if event_ticker and event_ticker in probability_extractions:
                 extraction = probability_extractions[event_ticker]
                 research_summary = extraction.overall_summary
-                
+
                 # Find market-specific probability
                 for market_prob in extraction.markets:
                     if market_prob.ticker == decision.ticker:
-                        research_probability = market_prob.research_probability
+                        # Convert from 0-100 scale to 0-1 scale for consistent storage
+                        research_probability = market_prob.research_probability / 100.0 if market_prob.research_probability is not None else None
                         research_reasoning = market_prob.reasoning
                         break
             
@@ -2003,7 +2026,7 @@ class SimpleTradingBot:
                 'confidence': decision.confidence,
                 'reasoning': decision.reasoning,
                 
-                # Research data (original scale 0-100%)
+                # Research data (normalized 0-1 scale)
                 'research_probability': research_probability,
                 'research_reasoning': research_reasoning,
                 
@@ -2200,7 +2223,8 @@ class SimpleTradingBot:
 
                 for market_prob in extraction.markets:
                     if market_prob.ticker == decision.ticker:
-                        research_probability = market_prob.research_probability
+                        # Convert from 0-100 scale to 0-1 scale for consistent storage
+                        research_probability = market_prob.research_probability / 100.0 if market_prob.research_probability is not None else None
                         research_reasoning = market_prob.reasoning
                         break
 

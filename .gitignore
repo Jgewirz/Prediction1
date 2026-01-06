@@ -114,3 +114,7 @@ betting_decisions/
 
 # Auto Claude data directory
 .auto-claude/
+
+# Sensitive files
+render.env
+.claude_settings.json
