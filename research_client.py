@@ -11,6 +11,11 @@ Calibration enhancements (Phase 4):
 - Base rate anchoring to prevent overconfidence
 - Explicit uncertainty quantification
 - Calibration guidelines embedded in prompts
+
+Enhanced Context (Phase 5):
+- Full event rules and settlement criteria
+- Per-market strike thresholds and YES/NO definitions
+- Event data caching for API efficiency
 """
 
 import re
@@ -19,6 +24,21 @@ from typing import Any, Dict, List, Optional
 import openai
 from config import OctagonConfig, OpenAIConfig
 from loguru import logger
+
+# Enhanced market context imports
+try:
+    from enhanced_market_context import (
+        EventContext,
+        MarketContext,
+        build_enhanced_research_prompt,
+        extract_market_context,
+        fetch_event_details,
+        get_event_cache,
+    )
+    ENHANCED_CONTEXT_AVAILABLE = True
+except ImportError:
+    ENHANCED_CONTEXT_AVAILABLE = False
+    logger.warning("Enhanced market context module not available - using basic prompts")
 
 # =============================================================================
 # CALIBRATION-AWARE PROMPT TEMPLATES
@@ -343,6 +363,107 @@ Example format:
                 f"Error researching event {event.get('event_ticker', '')}: {e}"
             )
             return f"Error researching event: {str(e)}"
+
+    async def research_event_enhanced(
+        self,
+        kalshi_client,  # KalshiClient instance for fetching event details
+        event: Dict[str, Any],
+        markets: List[Dict[str, Any]],
+        trending_context: str = "",
+    ) -> str:
+        """
+        Enhanced research with full event context including settlement rules.
+
+        This method fetches additional event details (rules, strike thresholds)
+        to provide GPT-4o with market-specific context for better predictions.
+
+        Args:
+            kalshi_client: KalshiClient instance for API calls
+            event: Event information (title, subtitle, category, etc.)
+            markets: List of markets within the event (without odds)
+            trending_context: Optional trending news signals from TrendRadar
+
+        Returns:
+            Research response as a string
+        """
+        if not ENHANCED_CONTEXT_AVAILABLE:
+            # Fallback to basic research
+            logger.info("Enhanced context not available, using basic research")
+            return await self.research_event(event, markets, trending_context)
+
+        try:
+            event_ticker = event.get("event_ticker", "")
+
+            # Fetch full event context (uses cache)
+            event_ctx = await fetch_event_details(
+                kalshi_client,
+                event_ticker,
+                use_cache=True
+            )
+
+            if not event_ctx:
+                # Fallback to basic context from event dict
+                event_ctx = EventContext(
+                    event_ticker=event_ticker,
+                    title=event.get("title", ""),
+                    subtitle=event.get("subtitle", ""),
+                    category=event.get("category", ""),
+                    mutually_exclusive=event.get("mutually_exclusive", False),
+                    series_ticker=event.get("series_ticker", ""),
+                    strike_date=event.get("strike_date", ""),
+                )
+
+            # Extract full market contexts
+            market_contexts = []
+            for market in markets:
+                if market.get("volume", 0) < 100:
+                    continue
+                market_contexts.append(extract_market_context(market))
+
+            if not market_contexts:
+                return "No markets with sufficient volume to analyze."
+
+            # Sanitize trending context
+            sanitized_trending = ""
+            if trending_context:
+                sanitized_trending = sanitize_trending_context(trending_context)
+
+            # Build enhanced prompt with full context
+            prompt = build_enhanced_research_prompt(
+                event_ctx,
+                market_contexts,
+                sanitized_trending
+            )
+
+            # Use calibration system prompt
+            system_prompt = CALIBRATION_SYSTEM_PROMPT
+
+            logger.info(
+                f"Researching event {event_ticker} via GPT-4o (enhanced context: "
+                f"rules={len(event_ctx.rules_primary)} chars, "
+                f"markets={len(market_contexts)})"
+            )
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=4096,
+            )
+
+            content = response.choices[0].message.content
+            logger.info(f"Completed enhanced research for event {event_ticker}")
+
+            return content if content else ""
+
+        except Exception as e:
+            logger.error(f"Error in enhanced research for {event.get('event_ticker', '')}: {e}")
+            # Fallback to basic research on error
+            logger.info("Falling back to basic research due to error")
+            return await self.research_event(event, markets, trending_context)
 
     async def close(self):
         """Close the client."""

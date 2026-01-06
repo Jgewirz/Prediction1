@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load environment variables
@@ -28,8 +28,9 @@ class KalshiConfig(BaseModel):
             return "https://demo-api.kalshi.co"
         return "https://api.elections.kalshi.com"
 
-    @validator("private_key")
-    def validate_private_key(cls, v):
+    @field_validator("private_key", mode="before")
+    @classmethod
+    def validate_private_key(cls, v: str) -> str:
         """Validate and format private key."""
         if not v or v == "your_kalshi_private_key_here":
             raise ValueError(
@@ -80,8 +81,9 @@ class OpenAIConfig(BaseModel):
     api_key: str = Field(..., description="OpenAI API key")
     model: str = Field(default="gpt-4o", description="OpenAI model to use")
 
-    @validator("api_key")
-    def validate_api_key(cls, v):
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def validate_api_key(cls, v: str) -> str:
         if not v or v == "your_openai_api_key_here":
             raise ValueError(
                 "OPENAI_API_KEY is required. Please set it in your .env file."
@@ -231,6 +233,32 @@ class TrendRadarConfig(BaseModel):
     # Cache settings
     cache_ttl_seconds: float = Field(
         default=300.0, ge=60, le=1800, description="Signal cache TTL in seconds"
+    )
+
+
+class EnhancedContextConfig(BaseModel):
+    """Enhanced market context configuration for improved AI research."""
+
+    enabled: bool = Field(
+        default=True, description="Enable enhanced context fetching (rules, settlement)"
+    )
+    event_cache_ttl_seconds: float = Field(
+        default=300.0, ge=60, le=1800, description="Event context cache TTL in seconds"
+    )
+    fetch_settlement_rules: bool = Field(
+        default=True, description="Fetch rules_primary and rules_secondary from API"
+    )
+    fetch_strike_thresholds: bool = Field(
+        default=True, description="Fetch floor_strike, cap_strike, strike_type"
+    )
+    include_yes_no_descriptions: bool = Field(
+        default=True, description="Include yes_sub_title and no_sub_title in prompts"
+    )
+    prioritize_high_signal_markets: bool = Field(
+        default=True, description="Prioritize markets where news analysis adds value"
+    )
+    max_rules_chars: int = Field(
+        default=500, ge=100, le=2000, description="Max chars for rules in prompt"
     )
 
 
