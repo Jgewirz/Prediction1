@@ -18,7 +18,7 @@ from trading_bot import SimpleTradingBot
 from reconciliation import run_reconciliation
 from config import load_config
 from position_monitor import PositionMonitor, create_position_monitor
-from dashboard.broadcaster import broadcast_status, broadcast_alert, broadcast_kpi_update
+from dashboard.broadcaster import broadcast_status, broadcast_alert, broadcast_kpi_update, broadcast_cli_log, broadcast_account_update
 
 
 class ContinuousTradingBot:
@@ -49,6 +49,13 @@ class ContinuousTradingBot:
         self.console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
 
         logger.info(f"=== Starting trading run #{self.total_runs} ===")
+
+        # Broadcast CLI log
+        await broadcast_cli_log(
+            level="info",
+            message=f"Starting trading run #{self.total_runs}",
+            source="scheduler"
+        )
 
         # Broadcast status: trading run starting
         await broadcast_status(
@@ -86,6 +93,14 @@ class ContinuousTradingBot:
             logger.info(f"Trading run #{self.total_runs} completed in {duration:.1f}s")
             self.console.print(f"\n[green]Trading run #{self.total_runs} completed in {duration:.1f}s[/green]")
 
+            # Broadcast CLI log
+            await broadcast_cli_log(
+                level="success",
+                message=f"Trading run #{self.total_runs} completed in {duration:.1f}s",
+                source="scheduler",
+                details={"duration": duration, "successful_runs": self.successful_runs}
+            )
+
             # Broadcast status: run completed successfully
             await broadcast_status(
                 bot_running=True,
@@ -101,10 +116,26 @@ class ContinuousTradingBot:
             # Update KPIs after successful run
             await broadcast_kpi_update()
 
+            # Broadcast account update with real Kalshi data
+            if hasattr(bot, 'kalshi_client') and bot.kalshi_client:
+                try:
+                    account_data = await bot.kalshi_client.get_account_summary()
+                    await broadcast_account_update(account_data)
+                except Exception as e:
+                    logger.debug(f"Could not broadcast account update: {e}")
+
         except Exception as e:
             self.consecutive_failures += 1
             logger.error(f"Trading run failed (failure #{self.consecutive_failures}): {e}")
             self.console.print(f"\n[red]Trading run #{self.total_runs} failed: {e}[/red]")
+
+            # Broadcast CLI log
+            await broadcast_cli_log(
+                level="error",
+                message=f"Trading run #{self.total_runs} failed: {str(e)[:200]}",
+                source="scheduler",
+                details={"consecutive_failures": self.consecutive_failures}
+            )
 
             # Broadcast alert on failure
             await broadcast_alert(
@@ -164,14 +195,42 @@ class ContinuousTradingBot:
             triggers = await self.position_monitor.check_all_positions()
             if triggers:
                 for trigger in triggers:
-                    self.console.print(
-                        f"[yellow]EXIT TRIGGERED: {trigger.trigger_type.value.upper()} "
+                    msg = (
+                        f"EXIT TRIGGERED: {trigger.trigger_type.value.upper()} "
                         f"on {trigger.position.market_ticker} "
-                        f"P&L: ${trigger.position.unrealized_pnl_dollars:.2f}[/yellow]"
+                        f"P&L: ${trigger.position.unrealized_pnl_dollars:.2f}"
                     )
+                    self.console.print(f"[yellow]{msg}[/yellow]")
                     logger.info(f"Exit triggered: {trigger.to_dict()}")
+                    # Broadcast CLI log for exit trigger
+                    await broadcast_cli_log(
+                        level="warning",
+                        message=msg,
+                        source="position_monitor",
+                        details={
+                            "ticker": trigger.position.market_ticker,
+                            "trigger_type": trigger.trigger_type.value,
+                            "pnl": trigger.position.unrealized_pnl_dollars
+                        }
+                    )
         except Exception as e:
             logger.error(f"Position monitor check failed: {e}")
+
+    async def account_update_job(self):
+        """Periodically broadcast real Kalshi account data to dashboard."""
+        from kalshi_client import KalshiClient
+
+        try:
+            kalshi = KalshiClient(self.config.kalshi)
+            await kalshi.login()
+            account_data = await kalshi.get_account_summary()
+            await kalshi.close()
+
+            if account_data.get("api_connected"):
+                await broadcast_account_update(account_data)
+                logger.debug(f"Account update broadcast: equity=${account_data.get('total_equity', 0):.2f}")
+        except Exception as e:
+            logger.debug(f"Account update job failed: {e}")
 
     def setup_signal_handlers(self):
         """Setup graceful shutdown handlers."""
@@ -253,6 +312,16 @@ class ContinuousTradingBot:
                 max_instances=1
             )
             self.console.print(f"Position monitoring interval: {self.config.stop_loss.monitor_interval_seconds} seconds")
+
+        # Schedule account updates for real-time dashboard (every 30 seconds)
+        self.scheduler.add_job(
+            self.account_update_job,
+            IntervalTrigger(seconds=30),
+            id='account_update',
+            name='Account Update',
+            max_instances=1
+        )
+        self.console.print("Account update interval: 30 seconds")
 
         # Start scheduler
         self.scheduler.start()

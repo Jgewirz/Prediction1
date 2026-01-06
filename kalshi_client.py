@@ -976,6 +976,108 @@ class KalshiClient:
             logger.error(f"Error getting portfolio settlements: {e}")
             return []
 
+    async def get_balance(self) -> Dict[str, Any]:
+        """
+        Get account balance and portfolio value from Kalshi API.
+
+        Returns:
+            Dictionary with:
+            - balance: Available balance in cents
+            - portfolio_value: Current value of all positions in cents
+            - updated_ts: Unix timestamp of last update
+        """
+        try:
+            headers = await self._get_headers("GET", "/trade-api/v2/portfolio/balance")
+            response = await self.client.get(
+                "/trade-api/v2/portfolio/balance",
+                headers=headers
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            logger.info(f"Retrieved balance: ${data.get('balance', 0)/100:.2f}, portfolio: ${data.get('portfolio_value', 0)/100:.2f}")
+            return {
+                "balance": data.get("balance", 0),  # In cents
+                "portfolio_value": data.get("portfolio_value", 0),  # In cents
+                "updated_ts": data.get("updated_ts", 0),
+                # Convert to dollars for convenience
+                "balance_dollars": data.get("balance", 0) / 100,
+                "portfolio_value_dollars": data.get("portfolio_value", 0) / 100,
+                "total_equity_dollars": (data.get("balance", 0) + data.get("portfolio_value", 0)) / 100
+            }
+        except Exception as e:
+            logger.error(f"Error getting balance: {e}")
+            return {
+                "balance": 0,
+                "portfolio_value": 0,
+                "updated_ts": 0,
+                "balance_dollars": 0,
+                "portfolio_value_dollars": 0,
+                "total_equity_dollars": 0,
+                "error": str(e)
+            }
+
+    async def get_account_summary(self) -> Dict[str, Any]:
+        """
+        Get comprehensive account summary including balance, positions, and P&L.
+
+        Returns:
+            Dictionary with full account overview
+        """
+        try:
+            # Get balance
+            balance_data = await self.get_balance()
+
+            # Get current positions
+            positions = await self.get_user_positions()
+
+            # Calculate position metrics
+            total_exposure = 0
+            total_realized_pnl = 0
+            open_positions = []
+
+            for pos in positions:
+                position_count = pos.get("position", 0)
+                if position_count != 0:
+                    market_exposure = pos.get("market_exposure", 0) / 100  # Convert cents to dollars
+                    realized_pnl = pos.get("realized_pnl", 0) / 100
+                    total_exposure += abs(market_exposure)
+                    total_realized_pnl += realized_pnl
+                    open_positions.append({
+                        "ticker": pos.get("ticker", ""),
+                        "position": position_count,
+                        "market_exposure": market_exposure,
+                        "realized_pnl": realized_pnl,
+                        "fees_paid": pos.get("fees_paid", 0) / 100,
+                        "total_traded": pos.get("total_traded", 0),
+                    })
+
+            return {
+                "balance": balance_data.get("balance_dollars", 0),
+                "portfolio_value": balance_data.get("portfolio_value_dollars", 0),
+                "total_equity": balance_data.get("total_equity_dollars", 0),
+                "open_positions_count": len(open_positions),
+                "total_exposure": total_exposure,
+                "realized_pnl": total_realized_pnl,
+                "positions": open_positions,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "api_connected": True
+            }
+        except Exception as e:
+            logger.error(f"Error getting account summary: {e}")
+            return {
+                "balance": 0,
+                "portfolio_value": 0,
+                "total_equity": 0,
+                "open_positions_count": 0,
+                "total_exposure": 0,
+                "realized_pnl": 0,
+                "positions": [],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "api_connected": False,
+                "error": str(e)
+            }
+
     async def close(self):
         """Close the HTTP client."""
         if self.client:

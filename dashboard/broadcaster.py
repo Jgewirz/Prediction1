@@ -228,6 +228,82 @@ async def broadcast_workflow_step(
         return False
 
 
+async def broadcast_cli_log(
+    level: str,
+    message: str,
+    source: str = "bot",
+    details: Optional[Dict[str, Any]] = None,
+    base_url: str = DASHBOARD_API_URL
+) -> bool:
+    """
+    Broadcast a CLI log entry to the dashboard.
+
+    Args:
+        level: Log level (info, warning, error, debug, success)
+        message: Log message text
+        source: Source of the log (bot, position_monitor, scheduler, etc.)
+        details: Optional dictionary with additional log data
+        base_url: Dashboard API URL
+
+    Returns:
+        True if broadcast succeeded, False otherwise
+    """
+    from datetime import datetime
+
+    log_data = {
+        "level": level,
+        "message": message,
+        "source": source,
+        "details": details or {},
+        "timestamp": datetime.now().isoformat()
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{base_url}/api/broadcast/cli_log",
+                json=log_data
+            )
+            if response.status_code == 200:
+                return True
+            else:
+                return False
+    except httpx.ConnectError:
+        return False
+    except Exception:
+        return False
+
+
+async def broadcast_account_update(
+    account_data: Dict[str, Any],
+    base_url: str = DASHBOARD_API_URL
+) -> bool:
+    """
+    Broadcast real Kalshi account data to the dashboard.
+
+    Args:
+        account_data: Dictionary with balance, positions, P&L, etc.
+        base_url: Dashboard API URL
+
+    Returns:
+        True if broadcast succeeded, False otherwise
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{base_url}/api/broadcast/account",
+                json=account_data
+            )
+            if response.status_code == 200:
+                return True
+            else:
+                return False
+    except httpx.ConnectError:
+        return False
+    except Exception:
+        return False
+
+
 class DashboardBroadcaster:
     """
     Context manager for dashboard broadcasting.

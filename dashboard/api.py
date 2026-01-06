@@ -777,6 +777,121 @@ async def broadcast_workflow_step(step: Dict[str, Any]) -> Dict[str, Any]:
     return {"sent_to": sent, "message": "Workflow step broadcast"}
 
 
+@app.post("/api/broadcast/cli_log")
+async def broadcast_cli_log_entry(log: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Broadcast CLI log entry to subscribers.
+    Called throughout bot execution to stream terminal output.
+
+    Expected log format:
+    {
+        "level": "info" | "warning" | "error" | "success" | "debug",
+        "message": "Log message text",
+        "source": "bot" | "position_monitor" | "scheduler",
+        "details": {...},
+        "timestamp": "ISO timestamp"
+    }
+    """
+    sent = await manager.broadcast_cli_log(log)
+    return {"sent_to": sent, "message": "CLI log broadcast"}
+
+
+@app.post("/api/broadcast/account")
+async def broadcast_account_data(account: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Broadcast real Kalshi account data to subscribers.
+    Called periodically to update dashboard with live account metrics.
+    """
+    sent = await manager.broadcast_account_update(account)
+    return {"sent_to": sent, "message": "Account data broadcast"}
+
+
+# === Real Kalshi Account Endpoint ===
+
+@app.get("/api/account")
+async def get_kalshi_account() -> Dict[str, Any]:
+    """
+    Get real Kalshi account data directly from the API.
+
+    Returns:
+    - balance: Available cash balance
+    - portfolio_value: Current value of open positions
+    - total_equity: balance + portfolio_value
+    - positions: List of open positions with P&L
+    - api_connected: Whether Kalshi API is accessible
+    """
+    from kalshi_client import KalshiClient
+    from config import load_config
+
+    try:
+        config = load_config()
+        kalshi = KalshiClient(config.kalshi)
+        await kalshi.login()
+
+        account_data = await kalshi.get_account_summary()
+        await kalshi.close()
+
+        return account_data
+    except Exception as e:
+        return {
+            "balance": 0,
+            "portfolio_value": 0,
+            "total_equity": 0,
+            "open_positions_count": 0,
+            "total_exposure": 0,
+            "realized_pnl": 0,
+            "positions": [],
+            "api_connected": False,
+            "error": str(e)
+        }
+
+
+@app.get("/api/positions")
+async def get_kalshi_positions() -> Dict[str, Any]:
+    """
+    Get detailed position data from Kalshi API.
+    Returns all current positions with market info.
+    """
+    from kalshi_client import KalshiClient
+    from config import load_config
+
+    try:
+        config = load_config()
+        kalshi = KalshiClient(config.kalshi)
+        await kalshi.login()
+
+        positions = await kalshi.get_user_positions()
+        await kalshi.close()
+
+        # Process positions for display
+        open_positions = []
+        for pos in positions:
+            if pos.get("position", 0) != 0:
+                open_positions.append({
+                    "ticker": pos.get("ticker", ""),
+                    "position": pos.get("position", 0),
+                    "market_exposure": pos.get("market_exposure", 0) / 100,
+                    "realized_pnl": pos.get("realized_pnl", 0) / 100,
+                    "fees_paid": pos.get("fees_paid", 0) / 100,
+                    "total_traded": pos.get("total_traded", 0),
+                    "total_traded_dollars": pos.get("total_traded_dollars", 0) / 100,
+                    "last_updated": pos.get("last_updated_ts", 0),
+                })
+
+        return {
+            "positions": open_positions,
+            "total_count": len(open_positions),
+            "api_connected": True
+        }
+    except Exception as e:
+        return {
+            "positions": [],
+            "total_count": 0,
+            "api_connected": False,
+            "error": str(e)
+        }
+
+
 # === Time Series Chart Endpoints ===
 
 @app.get("/api/charts/pnl-curve")

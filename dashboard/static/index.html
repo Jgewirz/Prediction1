@@ -29,11 +29,45 @@
             </div>
         </div>
 
-        <!-- KPI Grid -->
+        <!-- Kalshi Account Data (Real API) -->
+        <div class="account-panel" id="account-panel">
+            <div class="account-header">
+                <h3>Kalshi Account</h3>
+                <span class="api-status" id="api-status">Connecting...</span>
+            </div>
+            <div class="account-cards">
+                <div class="account-card">
+                    <div class="value" id="account-balance">$0.00</div>
+                    <div class="label">Available Balance</div>
+                </div>
+                <div class="account-card">
+                    <div class="value" id="account-portfolio">$0.00</div>
+                    <div class="label">Portfolio Value</div>
+                </div>
+                <div class="account-card highlight">
+                    <div class="value" id="account-equity">$0.00</div>
+                    <div class="label">Total Equity</div>
+                </div>
+                <div class="account-card">
+                    <div class="value" id="account-positions">0</div>
+                    <div class="label">Open Positions</div>
+                </div>
+                <div class="account-card">
+                    <div class="value" id="account-exposure">$0.00</div>
+                    <div class="label">Market Exposure</div>
+                </div>
+                <div class="account-card">
+                    <div class="value" id="account-realized-pnl">$0.00</div>
+                    <div class="label">Realized P&L</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Grid (Bot Decisions) -->
         <div class="kpi-grid" id="kpi-grid">
             <div class="kpi-card">
                 <div class="value" id="kpi-pnl">$0.00</div>
-                <div class="label">Realized P&L (7d)</div>
+                <div class="label">Bot P&L (7d)</div>
             </div>
             <div class="kpi-card">
                 <div class="value" id="kpi-winrate">0%</div>
@@ -58,6 +92,21 @@
             <div class="kpi-card">
                 <div class="value" id="kpi-skipped">0</div>
                 <div class="label">Skipped</div>
+            </div>
+        </div>
+
+        <!-- CLI Terminal Panel -->
+        <div class="cli-panel" id="cli-panel">
+            <div class="cli-header">
+                <h3>Live CLI Output</h3>
+                <div class="cli-controls">
+                    <span class="log-count" id="log-count">0 entries</span>
+                    <button class="cli-btn" onclick="clearLogs()">Clear</button>
+                    <button class="cli-btn" onclick="toggleAutoScroll()" id="autoscroll-btn">Auto-scroll: ON</button>
+                </div>
+            </div>
+            <div class="cli-terminal" id="cli-terminal">
+                <div class="cli-log info">[System] Connecting to trading bot...</div>
             </div>
         </div>
 

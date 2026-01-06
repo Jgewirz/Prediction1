@@ -579,6 +579,189 @@ body {
     word-break: break-word;
 }
 
+/* Kalshi Account Panel */
+.account-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 16px;
+    border-left: 4px solid var(--accent-blue);
+}
+
+.account-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.account-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.api-status {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+}
+
+.api-status.connected {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.api-status.disconnected {
+    background: var(--accent-red-dim);
+    color: var(--accent-red);
+}
+
+.account-cards {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+}
+
+.account-card {
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    padding: 12px;
+    text-align: center;
+}
+
+.account-card.highlight {
+    background: var(--accent-blue-dim);
+    border: 1px solid var(--accent-blue);
+}
+
+.account-card .value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.account-card .value.positive {
+    color: var(--accent-green);
+}
+
+.account-card .value.negative {
+    color: var(--accent-red);
+}
+
+.account-card .label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* CLI Terminal Panel */
+.cli-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.cli-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.cli-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.cli-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.log-count {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.cli-btn {
+    background: var(--bg-hover);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.cli-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.cli-terminal {
+    background: #0a0a0a;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    color: var(--text-secondary);
+}
+
+.cli-log {
+    padding: 2px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.cli-log .log-time {
+    color: var(--text-muted);
+    margin-right: 8px;
+}
+
+.cli-log .log-source {
+    color: var(--accent-blue);
+    margin-right: 8px;
+}
+
+.cli-log.info {
+    color: var(--text-secondary);
+}
+
+.cli-log.success {
+    color: var(--accent-green);
+}
+
+.cli-log.warning {
+    color: var(--accent-yellow);
+}
+
+.cli-log.error {
+    color: var(--accent-red);
+}
+
+.cli-log.debug {
+    color: var(--text-muted);
+}
+
 /* Workflow Progress Panel */
 .workflow-panel {
     background: var(--bg-secondary);
@@ -742,8 +925,16 @@ body {
         grid-template-columns: repeat(2, 1fr);
     }
 
+    .account-cards {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
     .workflow-steps {
         grid-template-columns: repeat(2, 1fr);
+    }
+
+    .cli-terminal {
+        max-height: 200px;
     }
 
     .filters-bar {

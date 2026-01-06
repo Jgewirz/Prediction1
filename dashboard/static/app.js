@@ -17,7 +17,11 @@ const state = {
     reconnectAttempts: 0,
     maxReconnectAttempts: 10,
     decisions: [],
-    kpis: null
+    kpis: null,
+    account: null,
+    cliLogs: [],
+    maxLogs: 500,
+    autoScroll: true
 };
 
 // WebSocket instance
@@ -32,7 +36,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
     loadKPIs();
     loadDecisions();
+    loadAccount();
     setupEventListeners();
+    // Refresh account data every 30 seconds
+    setInterval(loadAccount, 30000);
 });
 
 // =====================
@@ -65,10 +72,10 @@ function handleWsOpen() {
     state.reconnectAttempts = 0;
     updateConnectionStatus('connected');
 
-    // Subscribe to all topics including workflow
+    // Subscribe to all topics including workflow, CLI logs, and account
     ws.send(JSON.stringify({
         action: 'subscribe',
-        topics: ['decisions', 'kpis', 'alerts', 'status', 'workflow', 'all']
+        topics: ['decisions', 'kpis', 'alerts', 'status', 'workflow', 'cli_logs', 'account', 'all']
     }));
 }
 
@@ -104,6 +111,14 @@ function handleWsMessage(event) {
 
             case 'workflow_step':
                 handleWorkflowStep(message.data);
+                break;
+
+            case 'cli_log':
+                handleCliLog(message.data);
+                break;
+
+            case 'account_update':
+                handleAccountUpdate(message.data);
                 break;
 
             case 'heartbeat':
@@ -352,6 +367,132 @@ function resetWorkflowSteps() {
         const details = el.querySelector('.step-details');
         if (details) details.textContent = '';
     });
+}
+
+// =====================
+// CLI Log Handling
+// =====================
+function handleCliLog(log) {
+    const terminal = document.getElementById('cli-terminal');
+    if (!terminal) return;
+
+    const level = log.level || 'info';
+    const message = log.message || '';
+    const source = log.source || 'bot';
+    const timestamp = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+    // Create log entry
+    const logEl = document.createElement('div');
+    logEl.className = `cli-log ${level}`;
+    logEl.innerHTML = `<span class="log-time">${timestamp}</span> <span class="log-source">[${source}]</span> ${escapeHtml(message)}`;
+
+    // Add to terminal
+    terminal.appendChild(logEl);
+
+    // Store in state
+    state.cliLogs.push({ level, message, source, timestamp: log.timestamp });
+
+    // Trim old logs
+    while (state.cliLogs.length > state.maxLogs) {
+        state.cliLogs.shift();
+        if (terminal.firstChild) {
+            terminal.removeChild(terminal.firstChild);
+        }
+    }
+
+    // Update count
+    const countEl = document.getElementById('log-count');
+    if (countEl) countEl.textContent = `${state.cliLogs.length} entries`;
+
+    // Auto-scroll if enabled
+    if (state.autoScroll) {
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+}
+
+function clearLogs() {
+    const terminal = document.getElementById('cli-terminal');
+    if (terminal) {
+        terminal.innerHTML = '<div class="cli-log info">[System] Logs cleared</div>';
+    }
+    state.cliLogs = [];
+    const countEl = document.getElementById('log-count');
+    if (countEl) countEl.textContent = '0 entries';
+}
+
+function toggleAutoScroll() {
+    state.autoScroll = !state.autoScroll;
+    const btn = document.getElementById('autoscroll-btn');
+    if (btn) btn.textContent = `Auto-scroll: ${state.autoScroll ? 'ON' : 'OFF'}`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// =====================
+// Account Data Handling
+// =====================
+function handleAccountUpdate(account) {
+    state.account = account;
+    updateAccountDisplay(account);
+}
+
+async function loadAccount() {
+    try {
+        const response = await fetch('/api/account');
+        if (response.ok) {
+            const account = await response.json();
+            state.account = account;
+            updateAccountDisplay(account);
+        }
+    } catch (error) {
+        console.error('Error loading account:', error);
+        updateApiStatus(false);
+    }
+}
+
+function updateAccountDisplay(account) {
+    if (!account) return;
+
+    // Update API status
+    updateApiStatus(account.api_connected);
+
+    // Update account cards
+    const balanceEl = document.getElementById('account-balance');
+    if (balanceEl) balanceEl.textContent = `$${(account.balance || 0).toFixed(2)}`;
+
+    const portfolioEl = document.getElementById('account-portfolio');
+    if (portfolioEl) portfolioEl.textContent = `$${(account.portfolio_value || 0).toFixed(2)}`;
+
+    const equityEl = document.getElementById('account-equity');
+    if (equityEl) {
+        equityEl.textContent = `$${(account.total_equity || 0).toFixed(2)}`;
+        equityEl.className = 'value ' + (account.total_equity >= 0 ? 'positive' : 'negative');
+    }
+
+    const positionsEl = document.getElementById('account-positions');
+    if (positionsEl) positionsEl.textContent = account.open_positions_count || 0;
+
+    const exposureEl = document.getElementById('account-exposure');
+    if (exposureEl) exposureEl.textContent = `$${(account.total_exposure || 0).toFixed(2)}`;
+
+    const realizedEl = document.getElementById('account-realized-pnl');
+    if (realizedEl) {
+        const pnl = account.realized_pnl || 0;
+        realizedEl.textContent = `$${pnl.toFixed(2)}`;
+        realizedEl.className = 'value ' + (pnl >= 0 ? 'positive' : 'negative');
+    }
+}
+
+function updateApiStatus(connected) {
+    const statusEl = document.getElementById('api-status');
+    if (statusEl) {
+        statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+        statusEl.className = 'api-status ' + (connected ? 'connected' : 'disconnected');
+    }
 }
 
 function passesFilters(decision) {

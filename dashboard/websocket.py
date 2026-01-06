@@ -29,6 +29,8 @@ class MessageType(str, Enum):
     CONNECTED = "connected"
     SUBSCRIBED = "subscribed"
     WORKFLOW_STEP = "workflow_step"  # CLI workflow progress streaming
+    CLI_LOG = "cli_log"  # Real-time CLI output streaming
+    ACCOUNT_UPDATE = "account_update"  # Real Kalshi account data updates
 
 
 @dataclass
@@ -68,6 +70,8 @@ class ConnectionManager:
             "alerts": set(),
             "status": set(),
             "workflow": set(),  # CLI workflow step streaming
+            "cli_logs": set(),  # Real-time CLI output
+            "account": set(),  # Kalshi account updates
             "all": set()  # Subscribers to everything
         }
 
@@ -216,6 +220,22 @@ class ConnectionManager:
             data=step
         )
         return await self.broadcast(message, topic="workflow")
+
+    async def broadcast_cli_log(self, log: Dict[str, Any]) -> int:
+        """Broadcast a CLI log entry (real-time terminal output)."""
+        message = WebSocketMessage(
+            type=MessageType.CLI_LOG,
+            data=log
+        )
+        return await self.broadcast(message, topic="cli_logs")
+
+    async def broadcast_account_update(self, account: Dict[str, Any]) -> int:
+        """Broadcast real Kalshi account data update."""
+        message = WebSocketMessage(
+            type=MessageType.ACCOUNT_UPDATE,
+            data=account
+        )
+        return await self.broadcast(message, topic="account")
 
     async def send_heartbeat(self) -> None:
         """Send heartbeat to all connected clients."""
