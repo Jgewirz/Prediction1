@@ -4,19 +4,17 @@ Migrate existing calibration JSON data to SQLite database.
 
 import asyncio
 import json
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from db import Database, get_database
 from loguru import logger
 from rich.console import Console
 
-from db import get_database, Database
-
 
 async def migrate_calibration_json(
-    db: Database,
-    json_path: str = "calibration_data.json",
-    backup: bool = True
+    db: Database, json_path: str = "calibration_data.json", backup: bool = True
 ) -> Dict[str, Any]:
     """
     Migrate calibration_data.json to SQLite calibration_records table.
@@ -39,7 +37,7 @@ async def migrate_calibration_json(
     console.print(f"[blue]Migrating calibration data from {json_path}[/blue]")
 
     try:
-        with open(json_file, 'r', encoding='utf-8') as f:
+        with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         console.print(f"[red]Invalid JSON in {json_path}: {e}[/red]")
@@ -76,7 +74,7 @@ async def migrate_calibration_json(
             # Check if already exists
             exists = await db.fetchone(
                 "SELECT 1 FROM calibration_records WHERE prediction_id = ?",
-                (record['prediction_id'],)
+                (record["prediction_id"],),
             )
             if exists:
                 continue
@@ -90,17 +88,14 @@ async def migrate_calibration_json(
 
     # Backup original file
     if backup and records > 0:
-        backup_path = json_file.with_suffix('.json.backup')
+        backup_path = json_file.with_suffix(".json.backup")
         try:
             json_file.rename(backup_path)
             console.print(f"[green]Backed up original file to {backup_path}[/green]")
         except Exception as e:
             logger.warning(f"Could not backup calibration file: {e}")
 
-    summary = {
-        "records": records,
-        "errors": errors
-    }
+    summary = {"records": records, "errors": errors}
 
     console.print(f"\n[bold green]Calibration migration complete:[/bold green]")
     console.print(f"  Records migrated: {summary['records']}")
@@ -113,7 +108,7 @@ def _map_prediction_to_db(pred: Dict[str, Any]) -> Dict[str, Any]:
     """Map calibration prediction to database record format."""
 
     def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
-        if val is None or val == '':
+        if val is None or val == "":
             return default
         try:
             return float(val)
@@ -121,35 +116,39 @@ def _map_prediction_to_db(pred: Dict[str, Any]) -> Dict[str, Any]:
             return default
 
     # Generate prediction_id if not present
-    prediction_id = pred.get('prediction_id', '')
+    prediction_id = pred.get("prediction_id", "")
     if not prediction_id:
-        ticker = pred.get('ticker', 'UNKNOWN')
-        timestamp = pred.get('timestamp', datetime.now().isoformat())
+        ticker = pred.get("ticker", "UNKNOWN")
+        timestamp = pred.get("timestamp", datetime.now().isoformat())
         prediction_id = f"{ticker}_{timestamp}"
 
     # Parse timestamp
-    timestamp = pred.get('timestamp', '')
+    timestamp = pred.get("timestamp", "")
     if not timestamp:
         timestamp = datetime.now().isoformat()
 
     return {
-        'prediction_id': prediction_id,
-        'ticker': pred.get('ticker', pred.get('market_ticker', '')),
-        'event_ticker': pred.get('event_ticker', ''),
-        'predicted_prob': safe_float(pred.get('predicted_prob', pred.get('research_probability', ''))),
-        'market_price': safe_float(pred.get('market_price', '')),
-        'confidence': safe_float(pred.get('confidence', '')),
-        'r_score': safe_float(pred.get('r_score', '')),
-        'action': pred.get('action', ''),
-        'reasoning': pred.get('reasoning', ''),
-        'timestamp': timestamp,
-        'outcome': safe_float(pred.get('outcome', '')),
-        'resolved_timestamp': pred.get('resolved_timestamp', ''),
-        'actual_payout': safe_float(pred.get('actual_payout', '')),
+        "prediction_id": prediction_id,
+        "ticker": pred.get("ticker", pred.get("market_ticker", "")),
+        "event_ticker": pred.get("event_ticker", ""),
+        "predicted_prob": safe_float(
+            pred.get("predicted_prob", pred.get("research_probability", ""))
+        ),
+        "market_price": safe_float(pred.get("market_price", "")),
+        "confidence": safe_float(pred.get("confidence", "")),
+        "r_score": safe_float(pred.get("r_score", "")),
+        "action": pred.get("action", ""),
+        "reasoning": pred.get("reasoning", ""),
+        "timestamp": timestamp,
+        "outcome": safe_float(pred.get("outcome", "")),
+        "resolved_timestamp": pred.get("resolved_timestamp", ""),
+        "actual_payout": safe_float(pred.get("actual_payout", "")),
     }
 
 
-async def run_json_migration(json_path: str = "calibration_data.json", backup: bool = True):
+async def run_json_migration(
+    json_path: str = "calibration_data.json", backup: bool = True
+):
     """Run JSON migration as a standalone script."""
     from config import load_config
 

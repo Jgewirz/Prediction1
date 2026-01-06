@@ -7,17 +7,16 @@ Coverage:
 - Token/character limits
 - Trending context sanitization
 """
-import pytest
-import sys
+
 import os
+import sys
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from research_client import (
-    sanitize_headline,
-    sanitize_trending_context,
-    MAX_HEADLINE_CHARS,
-    MAX_TRENDING_CONTEXT_CHARS,
-)
+from research_client import (MAX_HEADLINE_CHARS, MAX_TRENDING_CONTEXT_CHARS,
+                             sanitize_headline, sanitize_trending_context)
 
 
 class TestSanitizeHeadline:

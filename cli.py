@@ -18,18 +18,18 @@ import asyncio
 import sys
 from datetime import datetime, timezone
 from typing import Optional
-import click
-from loguru import logger
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress
 
+import click
 # Local imports
 from config import load_config
-from kalshi_client import KalshiClient
 from db import get_database, get_postgres_database
+from kalshi_client import KalshiClient
+from loguru import logger
 from position_monitor import PositionMonitor, StopLossConfig
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress
+from rich.table import Table
 
 console = Console()
 
@@ -46,7 +46,7 @@ async def get_db_and_client():
             user=config.database.pg_user,
             password=config.database.pg_password,
             port=config.database.pg_port,
-            ssl=config.database.pg_ssl
+            ssl=config.database.pg_ssl,
         )
     else:
         db = await get_database(config.database.db_path)
@@ -65,7 +65,7 @@ def cli():
 
 
 @cli.command()
-@click.option('--live', is_flag=True, help='Show live positions from API (not just DB)')
+@click.option("--live", is_flag=True, help="Show live positions from API (not just DB)")
 def positions(live: bool):
     """Show all current positions with P&L."""
 
@@ -94,11 +94,13 @@ def positions(live: bool):
                     pos.get("ticker", ""),
                     side,
                     str(contracts),
-                    "-"  # API doesn't provide avg price directly
+                    "-",  # API doesn't provide avg price directly
                 )
 
             console.print(table)
-            console.print(f"\nTotal positions: {len([p for p in api_positions if p.get('position', 0) != 0])}")
+            console.print(
+                f"\nTotal positions: {len([p for p in api_positions if p.get('position', 0) != 0])}"
+            )
 
         else:
             # Get positions from database
@@ -158,7 +160,9 @@ def positions(live: bool):
 
             total_style = "green" if total_pnl >= 0 else "red"
             console.print(f"\n[bold]Total positions:[/bold] {len(rows)}")
-            console.print(f"[bold]Total Unrealized P&L:[/bold] [{total_style}]${total_pnl:.2f}[/{total_style}]")
+            console.print(
+                f"[bold]Total Unrealized P&L:[/bold] [{total_style}]${total_pnl:.2f}[/{total_style}]"
+            )
 
         await kalshi.close()
 
@@ -166,8 +170,8 @@ def positions(live: bool):
 
 
 @cli.command()
-@click.argument('ticker')
-@click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
+@click.argument("ticker")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
 def liquidate(ticker: str, confirm: bool):
     """Liquidate a specific position by ticker."""
 
@@ -184,31 +188,37 @@ def liquidate(ticker: str, confirm: bool):
         result = await kalshi.liquidate_position(ticker)
 
         if result.get("success"):
-            console.print(Panel(
-                f"[green]Position liquidated successfully![/green]\n\n"
-                f"Ticker: {ticker}\n"
-                f"Side: {result.get('side', 'unknown').upper()}\n"
-                f"Contracts: {result.get('contracts', 0)}\n"
-                f"Order ID: {result.get('order_id', 'N/A')}",
-                title="Liquidation Complete"
-            ))
+            console.print(
+                Panel(
+                    f"[green]Position liquidated successfully![/green]\n\n"
+                    f"Ticker: {ticker}\n"
+                    f"Side: {result.get('side', 'unknown').upper()}\n"
+                    f"Contracts: {result.get('contracts', 0)}\n"
+                    f"Order ID: {result.get('order_id', 'N/A')}",
+                    title="Liquidation Complete",
+                )
+            )
         else:
-            console.print(f"[red]Liquidation failed: {result.get('error', 'Unknown error')}[/red]")
+            console.print(
+                f"[red]Liquidation failed: {result.get('error', 'Unknown error')}[/red]"
+            )
 
         await kalshi.close()
 
     asyncio.run(_liquidate())
 
 
-@cli.command('liquidate-all')
-@click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
+@cli.command("liquidate-all")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
 def liquidate_all(confirm: bool):
     """EMERGENCY: Liquidate ALL open positions."""
 
     console.print("[bold red]WARNING: This will close ALL positions![/bold red]")
 
     if not confirm:
-        if not click.confirm("Are you ABSOLUTELY sure you want to liquidate ALL positions?"):
+        if not click.confirm(
+            "Are you ABSOLUTELY sure you want to liquidate ALL positions?"
+        ):
             console.print("[yellow]Cancelled.[/yellow]")
             return
 
@@ -223,12 +233,14 @@ def liquidate_all(confirm: bool):
             liquidated = result.get("liquidated", [])
             failed = result.get("failed", [])
 
-            console.print(Panel(
-                f"[green]Liquidation complete![/green]\n\n"
-                f"Positions closed: {len(liquidated)}\n"
-                f"Failed: {len(failed)}",
-                title="Emergency Liquidation Results"
-            ))
+            console.print(
+                Panel(
+                    f"[green]Liquidation complete![/green]\n\n"
+                    f"Positions closed: {len(liquidated)}\n"
+                    f"Failed: {len(failed)}",
+                    title="Emergency Liquidation Results",
+                )
+            )
 
             if liquidated:
                 table = Table(title="Liquidated Positions")
@@ -242,7 +254,7 @@ def liquidate_all(confirm: bool):
                         pos.get("ticker", ""),
                         pos.get("side", "").upper(),
                         str(pos.get("contracts", 0)),
-                        pos.get("order_id", "")[:20] + "..."
+                        pos.get("order_id", "")[:20] + "...",
                     )
 
                 console.print(table)
@@ -253,7 +265,9 @@ def liquidate_all(confirm: bool):
                     console.print(f"  - {pos.get('ticker')}: {pos.get('error')}")
 
         else:
-            console.print(f"[red]Liquidation failed: {result.get('error', 'Unknown error')}[/red]")
+            console.print(
+                f"[red]Liquidation failed: {result.get('error', 'Unknown error')}[/red]"
+            )
 
         await kalshi.close()
 
@@ -261,7 +275,7 @@ def liquidate_all(confirm: bool):
 
 
 @cli.command()
-@click.option('--interval', default=30, help='Monitor interval in seconds')
+@click.option("--interval", default=30, help="Monitor interval in seconds")
 def monitor(interval: int):
     """Start position monitor (stop-loss/take-profit) only."""
 
@@ -278,25 +292,29 @@ def monitor(interval: int):
         )
 
         def on_trigger(event):
-            console.print(Panel(
-                f"[bold {'red' if event.trigger_type.value == 'stop_loss' else 'green'}]"
-                f"{event.trigger_type.value.upper()} TRIGGERED[/bold]\n\n"
-                f"Ticker: {event.position.market_ticker}\n"
-                f"P&L: ${event.position.unrealized_pnl_dollars:.2f} "
-                f"({event.position.unrealized_pnl_pct * 100:.1f}%)\n"
-                f"Price: {event.trigger_price_cents}c",
-                title="Trigger Alert"
-            ))
+            console.print(
+                Panel(
+                    f"[bold {'red' if event.trigger_type.value == 'stop_loss' else 'green'}]"
+                    f"{event.trigger_type.value.upper()} TRIGGERED[/bold]\n\n"
+                    f"Ticker: {event.position.market_ticker}\n"
+                    f"P&L: ${event.position.unrealized_pnl_dollars:.2f} "
+                    f"({event.position.unrealized_pnl_pct * 100:.1f}%)\n"
+                    f"Price: {event.trigger_price_cents}c",
+                    title="Trigger Alert",
+                )
+            )
 
         monitor = PositionMonitor(
             config=config,
             kalshi=kalshi,
             db=db,
             sl_config=sl_config,
-            on_trigger=on_trigger
+            on_trigger=on_trigger,
         )
 
-        console.print(f"[green]Starting position monitor (interval: {interval}s)...[/green]")
+        console.print(
+            f"[green]Starting position monitor (interval: {interval}s)...[/green]"
+        )
         console.print("Press Ctrl+C to stop.\n")
 
         await monitor.start()
@@ -314,7 +332,7 @@ def monitor(interval: int):
 
 
 @cli.command()
-@click.option('--threshold', default=0.05, help='Distance threshold (e.g., 0.05 = 5%)')
+@click.option("--threshold", default=0.05, help="Distance threshold (e.g., 0.05 = 5%)")
 def triggers(threshold: float):
     """Show positions near stop-loss or take-profit triggers."""
 
@@ -357,7 +375,9 @@ def triggers(threshold: float):
                 near_tp.append({**dict(row), "distance": tp_distance})
 
         if near_sl:
-            table = Table(title=f"[red]Near Stop-Loss (within {threshold*100:.0f}%)[/red]")
+            table = Table(
+                title=f"[red]Near Stop-Loss (within {threshold*100:.0f}%)[/red]"
+            )
             table.add_column("Ticker")
             table.add_column("Distance", justify="right")
             table.add_column("P&L %", justify="right")
@@ -366,13 +386,15 @@ def triggers(threshold: float):
                 table.add_row(
                     pos["market_ticker"][:30],
                     f"{pos['distance']*100:.1f}%",
-                    f"{float(pos.get('unrealized_pnl_pct') or 0)*100:.1f}%"
+                    f"{float(pos.get('unrealized_pnl_pct') or 0)*100:.1f}%",
                 )
 
             console.print(table)
 
         if near_tp:
-            table = Table(title=f"[green]Near Take-Profit (within {threshold*100:.0f}%)[/green]")
+            table = Table(
+                title=f"[green]Near Take-Profit (within {threshold*100:.0f}%)[/green]"
+            )
             table.add_column("Ticker")
             table.add_column("Distance", justify="right")
             table.add_column("P&L %", justify="right")
@@ -381,13 +403,15 @@ def triggers(threshold: float):
                 table.add_row(
                     pos["market_ticker"][:30],
                     f"{pos['distance']*100:.1f}%",
-                    f"{float(pos.get('unrealized_pnl_pct') or 0)*100:.1f}%"
+                    f"{float(pos.get('unrealized_pnl_pct') or 0)*100:.1f}%",
                 )
 
             console.print(table)
 
         if not near_sl and not near_tp:
-            console.print(f"[dim]No positions within {threshold*100:.0f}% of triggers.[/dim]")
+            console.print(
+                f"[dim]No positions within {threshold*100:.0f}% of triggers.[/dim]"
+            )
 
         await kalshi.close()
 
@@ -395,8 +419,8 @@ def triggers(threshold: float):
 
 
 @cli.command()
-@click.option('--days', default=7, help='Number of days to look back')
-@click.option('--reason', default=None, help='Filter by exit reason')
+@click.option("--days", default=7, help="Number of days to look back")
+@click.option("--reason", default=None, help="Filter by exit reason")
 def exits(days: int, reason: Optional[str]):
     """Show exit history (stop-loss, take-profit, manual)."""
 
@@ -447,7 +471,7 @@ def exits(days: int, reason: Optional[str]):
                 "stop_loss": "red",
                 "take_profit": "green",
                 "trailing_stop": "yellow",
-                "manual": "blue"
+                "manual": "blue",
             }.get(row.get("exit_reason"), "white")
 
             table.add_row(
@@ -457,23 +481,25 @@ def exits(days: int, reason: Optional[str]):
                 f"{row.get('filled_price_cents') or 0}c",
                 f"{row.get('exit_price_cents') or 0}c",
                 f"[{pnl_style}]${pnl:.2f}[/{pnl_style}]",
-                str(row.get("exit_timestamp", ""))[:16]
+                str(row.get("exit_timestamp", ""))[:16],
             )
 
         console.print(table)
 
         total_style = "green" if total_pnl >= 0 else "red"
         console.print(f"\n[bold]Total exits:[/bold] {len(rows)}")
-        console.print(f"[bold]Total P&L:[/bold] [{total_style}]${total_pnl:.2f}[/{total_style}]")
+        console.print(
+            f"[bold]Total P&L:[/bold] [{total_style}]${total_pnl:.2f}[/{total_style}]"
+        )
 
         await kalshi.close()
 
     asyncio.run(_show_exits())
 
 
-@cli.command('set-sl')
-@click.argument('decision_id')
-@click.argument('stop_loss_pct', type=float)
+@cli.command("set-sl")
+@click.argument("decision_id")
+@click.argument("stop_loss_pct", type=float)
 def set_stop_loss(decision_id: str, stop_loss_pct: float):
     """Set stop-loss percentage for a position."""
 
@@ -490,7 +516,9 @@ def set_stop_loss(decision_id: str, stop_loss_pct: float):
         try:
             row = await db.fetchone(query, stop_loss_pct, decision_id)
             if row:
-                console.print(f"[green]Updated stop-loss for {row['market_ticker']} to {stop_loss_pct*100:.0f}%[/green]")
+                console.print(
+                    f"[green]Updated stop-loss for {row['market_ticker']} to {stop_loss_pct*100:.0f}%[/green]"
+                )
             else:
                 console.print(f"[red]Position not found: {decision_id}[/red]")
         except Exception as e:
@@ -501,9 +529,9 @@ def set_stop_loss(decision_id: str, stop_loss_pct: float):
     asyncio.run(_set_sl())
 
 
-@cli.command('set-tp')
-@click.argument('decision_id')
-@click.argument('take_profit_pct', type=float)
+@cli.command("set-tp")
+@click.argument("decision_id")
+@click.argument("take_profit_pct", type=float)
 def set_take_profit(decision_id: str, take_profit_pct: float):
     """Set take-profit percentage for a position."""
 
@@ -520,7 +548,9 @@ def set_take_profit(decision_id: str, take_profit_pct: float):
         try:
             row = await db.fetchone(query, take_profit_pct, decision_id)
             if row:
-                console.print(f"[green]Updated take-profit for {row['market_ticker']} to {take_profit_pct*100:.0f}%[/green]")
+                console.print(
+                    f"[green]Updated take-profit for {row['market_ticker']} to {take_profit_pct*100:.0f}%[/green]"
+                )
             else:
                 console.print(f"[red]Position not found: {decision_id}[/red]")
         except Exception as e:
@@ -543,12 +573,14 @@ def balance():
             positions = await kalshi.get_user_positions()
             position_count = len([p for p in positions if p.get("position", 0) != 0])
 
-            console.print(Panel(
-                f"[bold]Environment:[/bold] {'DEMO' if config.kalshi.use_demo else 'PRODUCTION'}\n"
-                f"[bold]Open positions:[/bold] {position_count}\n"
-                f"[bold]Configured bankroll:[/bold] ${config.bankroll:.2f}",
-                title="Account Status"
-            ))
+            console.print(
+                Panel(
+                    f"[bold]Environment:[/bold] {'DEMO' if config.kalshi.use_demo else 'PRODUCTION'}\n"
+                    f"[bold]Open positions:[/bold] {position_count}\n"
+                    f"[bold]Configured bankroll:[/bold] ${config.bankroll:.2f}",
+                    title="Account Status",
+                )
+            )
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
 

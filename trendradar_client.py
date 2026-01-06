@@ -15,19 +15,20 @@ Signal quality enhancements (v2):
 - Dynamic baseline frequency normalization
 - Single-lever probability adjustment (no double-counting)
 """
+
 import asyncio
-import httpx
+import hashlib
 import json
 import math
 import os
 import random
 import time
-import hashlib
-from enum import Enum
-from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
-from loguru import logger
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
+from loguru import logger
 
 # ============================================================================
 # OFFLINE_MODE: Deterministic mode for testing without external services
@@ -36,7 +37,9 @@ from loguru import logger
 OFFLINE_MODE = os.getenv("OFFLINE_MODE", "0").lower() in ("1", "true", "yes")
 
 if OFFLINE_MODE:
-    logger.warning("OFFLINE_MODE enabled: Using mock responses for TrendRadar and embeddings")
+    logger.warning(
+        "OFFLINE_MODE enabled: Using mock responses for TrendRadar and embeddings"
+    )
 
 
 # ============================================================================
@@ -44,6 +47,7 @@ if OFFLINE_MODE:
 # ============================================================================
 class OutletTier(Enum):
     """News outlet credibility tiers."""
+
     TIER1 = 1  # Major wire services, financial papers
     TIER2 = 2  # Major news networks
     TIER3 = 3  # Other sources
@@ -51,29 +55,42 @@ class OutletTier(Enum):
 
 # Tier-1: Major wire services and financial papers (highest weight)
 TIER1_OUTLETS = {
-    "reuters", "reuters-business", "reuters-politics",
-    "bloomberg", "bloomberg-markets",
-    "wsj", "wsj-markets", "wsj-world",
-    "ap", "ap-news", "ap-news-top", "ap-news-politics",
-    "nyt", "nyt-business", "nyt-politics",
-    "ft", "financial-times"
+    "reuters",
+    "reuters-business",
+    "reuters-politics",
+    "bloomberg",
+    "bloomberg-markets",
+    "wsj",
+    "wsj-markets",
+    "wsj-world",
+    "ap",
+    "ap-news",
+    "ap-news-top",
+    "ap-news-politics",
+    "nyt",
+    "nyt-business",
+    "nyt-politics",
+    "ft",
+    "financial-times",
 }
 
 # Tier-2: Major news networks (medium weight)
 TIER2_OUTLETS = {
-    "cnbc", "cnbc-top", "cnbc-world",
-    "marketwatch", "marketwatch-top",
-    "bbc", "bbc-news",
-    "cnn", "cnn-business",
-    "fox", "fox-business"
+    "cnbc",
+    "cnbc-top",
+    "cnbc-world",
+    "marketwatch",
+    "marketwatch-top",
+    "bbc",
+    "bbc-news",
+    "cnn",
+    "cnn-business",
+    "fox",
+    "fox-business",
 }
 
 # Tier weights for volume calculation
-TIER_WEIGHTS = {
-    OutletTier.TIER1: 1.0,
-    OutletTier.TIER2: 0.7,
-    OutletTier.TIER3: 0.4
-}
+TIER_WEIGHTS = {OutletTier.TIER1: 1.0, OutletTier.TIER2: 0.7, OutletTier.TIER3: 0.4}
 
 
 def get_outlet_tier(outlet_id: str) -> OutletTier:
@@ -90,25 +107,86 @@ def get_outlet_tier(outlet_id: str) -> OutletTier:
 # Sentiment Analysis Keywords (with negation handling)
 # ============================================================================
 POSITIVE_KEYWORDS = {
-    'gain', 'rise', 'up', 'surge', 'rally', 'boost', 'win', 'success',
-    'growth', 'positive', 'strong', 'good', 'best', 'record', 'high',
-    'soar', 'jump', 'climb', 'advance', 'improve', 'profit', 'beat'
+    "gain",
+    "rise",
+    "up",
+    "surge",
+    "rally",
+    "boost",
+    "win",
+    "success",
+    "growth",
+    "positive",
+    "strong",
+    "good",
+    "best",
+    "record",
+    "high",
+    "soar",
+    "jump",
+    "climb",
+    "advance",
+    "improve",
+    "profit",
+    "beat",
 }
 
 NEGATIVE_KEYWORDS = {
-    'fall', 'drop', 'down', 'crash', 'decline', 'lose', 'loss', 'fail',
-    'weak', 'negative', 'bad', 'worst', 'low', 'cut', 'fear', 'risk',
-    'plunge', 'sink', 'tumble', 'retreat', 'slump', 'miss', 'warning'
+    "fall",
+    "drop",
+    "down",
+    "crash",
+    "decline",
+    "lose",
+    "loss",
+    "fail",
+    "weak",
+    "negative",
+    "bad",
+    "worst",
+    "low",
+    "cut",
+    "fear",
+    "risk",
+    "plunge",
+    "sink",
+    "tumble",
+    "retreat",
+    "slump",
+    "miss",
+    "warning",
 }
 
 NEGATION_WORDS = {
-    'not', 'no', 'never', 'fails', 'unlikely', 'avoids', 'denies',
-    'without', 'lack', 'neither', 'nor', 'refuse', 'reject'
+    "not",
+    "no",
+    "never",
+    "fails",
+    "unlikely",
+    "avoids",
+    "denies",
+    "without",
+    "lack",
+    "neither",
+    "nor",
+    "refuse",
+    "reject",
 }
 
 UNCERTAINTY_WORDS = {
-    'may', 'could', 'might', 'reportedly', 'signals', 'weighs', 'considers',
-    'possible', 'potential', 'expected', 'likely', 'suggests', 'appears'
+    "may",
+    "could",
+    "might",
+    "reportedly",
+    "signals",
+    "weighs",
+    "considers",
+    "possible",
+    "potential",
+    "expected",
+    "likely",
+    "suggests",
+    "appears",
 }
 
 
@@ -118,6 +196,7 @@ UNCERTAINTY_WORDS = {
 @dataclass
 class CircuitBreakerConfig:
     """Configuration for circuit breaker pattern."""
+
     failure_threshold: int = 3  # Failures before opening circuit
     recovery_timeout: float = 300.0  # 5 minutes before attempting recovery
     half_open_max_calls: int = 1  # Calls allowed in half-open state
@@ -126,6 +205,7 @@ class CircuitBreakerConfig:
 @dataclass
 class CircuitBreakerState:
     """Mutable state for circuit breaker."""
+
     failure_count: int = 0
     last_failure_time: float = 0.0
     state: str = "closed"  # closed, open, half_open
@@ -137,7 +217,9 @@ class CircuitBreakerState:
         self.last_failure_time = time.time()
         if self.failure_count >= config.failure_threshold:
             self.state = "open"
-            logger.warning(f"Circuit breaker OPENED after {self.failure_count} failures")
+            logger.warning(
+                f"Circuit breaker OPENED after {self.failure_count} failures"
+            )
 
     def record_success(self) -> None:
         """Record a success and reset failure count."""
@@ -170,6 +252,7 @@ class CircuitBreakerState:
 @dataclass
 class CacheEntry:
     """A cached signal result with TTL."""
+
     signals: List["TrendingSignal"]
     timestamp: float
     ttl: float = 300.0  # 5 minutes default
@@ -190,7 +273,9 @@ class SignalCache:
         content = f"{event_title}|{event_category}".lower()
         return hashlib.md5(content.encode()).hexdigest()[:16]
 
-    def get(self, event_title: str, event_category: str) -> Optional[List["TrendingSignal"]]:
+    def get(
+        self, event_title: str, event_category: str
+    ) -> Optional[List["TrendingSignal"]]:
         """Get cached signals if valid."""
         key = self._cache_key(event_title, event_category)
         entry = self._cache.get(key)
@@ -199,10 +284,14 @@ class SignalCache:
             return entry.signals
         return None
 
-    def set(self, event_title: str, event_category: str, signals: List["TrendingSignal"]) -> None:
+    def set(
+        self, event_title: str, event_category: str, signals: List["TrendingSignal"]
+    ) -> None:
         """Cache signals for an event."""
         key = self._cache_key(event_title, event_category)
-        self._cache[key] = CacheEntry(signals=signals, timestamp=time.time(), ttl=self.default_ttl)
+        self._cache[key] = CacheEntry(
+            signals=signals, timestamp=time.time(), ttl=self.default_ttl
+        )
 
     def clear(self) -> None:
         """Clear all cached entries."""
@@ -212,6 +301,7 @@ class SignalCache:
 @dataclass
 class TrendingSignal:
     """A trending signal from TrendRadar with quality metrics."""
+
     topic: str
     sentiment: str  # "positive", "negative", "neutral"
     strength: float  # 0.0 to 1.0 (calculated from quality metrics)
@@ -222,23 +312,23 @@ class TrendingSignal:
     platforms: List[str] = field(default_factory=list)
 
     # NEW: De-duplication metrics (Phase 1)
-    raw_article_count: int = 0          # Before de-duplication
-    unique_story_count: int = 0         # After de-duplication
-    unique_outlet_count: int = 0        # Distinct news sources
-    tier1_outlet_count: int = 0         # Reuters, Bloomberg, WSJ, AP, etc.
-    tier2_outlet_count: int = 0         # CNBC, MarketWatch, etc.
+    raw_article_count: int = 0  # Before de-duplication
+    unique_story_count: int = 0  # After de-duplication
+    unique_outlet_count: int = 0  # Distinct news sources
+    tier1_outlet_count: int = 0  # Reuters, Bloomberg, WSJ, AP, etc.
+    tier2_outlet_count: int = 0  # CNBC, MarketWatch, etc.
     story_cluster_sizes: List[int] = field(default_factory=list)  # Size of each cluster
 
     # NEW: Quality metrics (Phases 2-4)
-    relevance: float = 0.0              # How relevant headlines are to event (0-1)
-    novelty: float = 1.0                # How new the news is (0-1, decays)
-    sentiment_confidence: float = 0.5   # Confidence in sentiment direction (0-1)
-    neutral_ratio: float = 0.0          # Fraction of headlines that are neutral
+    relevance: float = 0.0  # How relevant headlines are to event (0-1)
+    novelty: float = 1.0  # How new the news is (0-1, decays)
+    sentiment_confidence: float = 0.5  # Confidence in sentiment direction (0-1)
+    neutral_ratio: float = 0.0  # Fraction of headlines that are neutral
 
     # NEW: Baseline comparison (Phase 3)
-    baseline_frequency: float = 0.0     # Normal daily mention count for this entity
-    current_frequency: float = 0.0      # Current mention count
-    frequency_ratio: float = 1.0        # current / baseline (>1.5 is significant)
+    baseline_frequency: float = 0.0  # Normal daily mention count for this entity
+    current_frequency: float = 0.0  # Current mention count
+    frequency_ratio: float = 1.0  # current / baseline (>1.5 is significant)
 
     @property
     def is_strong(self) -> bool:
@@ -249,10 +339,15 @@ class TrendingSignal:
     def weighted_source_count(self) -> float:
         """Get tier-weighted source count."""
         return (
-            self.tier1_outlet_count * TIER_WEIGHTS[OutletTier.TIER1] +
-            self.tier2_outlet_count * TIER_WEIGHTS[OutletTier.TIER2] +
-            max(0, self.unique_outlet_count - self.tier1_outlet_count - self.tier2_outlet_count) *
-            TIER_WEIGHTS[OutletTier.TIER3]
+            self.tier1_outlet_count * TIER_WEIGHTS[OutletTier.TIER1]
+            + self.tier2_outlet_count * TIER_WEIGHTS[OutletTier.TIER2]
+            + max(
+                0,
+                self.unique_outlet_count
+                - self.tier1_outlet_count
+                - self.tier2_outlet_count,
+            )
+            * TIER_WEIGHTS[OutletTier.TIER3]
         )
 
     @property
@@ -326,7 +421,7 @@ def calculate_signal_strength(
     novelty: float,
     sentiment_confidence: float,
     neutral_ratio: float,
-    tier1_count: int = 0
+    tier1_count: int = 0,
 ) -> float:
     """
     Calculate signal strength with proper weighting (v2 formula).
@@ -362,7 +457,9 @@ def calculate_signal_strength(
 
     # Clarity component (with sample-size damping)
     # Avoid high clarity from tiny samples: confidence * n / (n + k)
-    sample_damping = sentiment_confidence * unique_story_count / (unique_story_count + 4)
+    sample_damping = (
+        sentiment_confidence * unique_story_count / (unique_story_count + 4)
+    )
 
     # Neutral penalty (if >50% of headlines are neutral, reduce strength)
     neutral_penalty = 1.0 - (max(0, neutral_ratio - 0.5) * 0.5)
@@ -371,7 +468,14 @@ def calculate_signal_strength(
     relevance_factor = max(relevance, 0.1)  # Floor at 0.1 to not zero out
 
     # Final strength
-    strength = volume * tier1_bonus * relevance_factor * novelty * sample_damping * neutral_penalty
+    strength = (
+        volume
+        * tier1_bonus
+        * relevance_factor
+        * novelty
+        * sample_damping
+        * neutral_penalty
+    )
 
     return min(max(strength, 0.0), 1.0)
 
@@ -429,7 +533,7 @@ def calculate_signal_influence(
     signal: TrendingSignal,
     action: str,
     research_probability: float,
-    config: SignalConfig = None
+    config: SignalConfig = None,
 ) -> Dict[str, Any]:
     """
     Calculate how a trending signal influences a betting decision (v2).
@@ -451,52 +555,58 @@ def calculate_signal_influence(
         config = SignalConfig()
 
     # Use unique_story_count (after de-dup) instead of raw source_count
-    effective_count = signal.unique_story_count if signal.unique_story_count > 0 else signal.source_count
+    effective_count = (
+        signal.unique_story_count
+        if signal.unique_story_count > 0
+        else signal.source_count
+    )
 
     # Determine if signal aligns with action
     # Positive sentiment -> supports YES
     # Negative sentiment -> supports NO
-    signal_aligns = (
-        (signal.sentiment == "positive" and action == "buy_yes") or
-        (signal.sentiment == "negative" and action == "buy_no")
+    signal_aligns = (signal.sentiment == "positive" and action == "buy_yes") or (
+        signal.sentiment == "negative" and action == "buy_no"
     )
 
-    signal_conflicts = (
-        (signal.sentiment == "positive" and action == "buy_no") or
-        (signal.sentiment == "negative" and action == "buy_yes")
+    signal_conflicts = (signal.sentiment == "positive" and action == "buy_no") or (
+        signal.sentiment == "negative" and action == "buy_yes"
     )
 
     result = {
         # NEW: Single-lever probability adjustment
         "probability_adjustment": 0.0,
-
         # DEPRECATED: Kept for backwards compatibility, always 1.0 now
         "confidence_boost": 0.0,
         "kelly_multiplier": 1.0,
-
         # Override and direction
         "should_override_skip": False,
         "signal_direction": "neutral",
         "reasoning": "",
-
         # NEW: Quality metrics for logging
         "unique_stories": effective_count,
         "relevance": signal.relevance,
-        "sentiment_confidence": signal.sentiment_confidence
+        "sentiment_confidence": signal.sentiment_confidence,
     }
 
     # Gate 1: Minimum story count
     if effective_count < config.min_unique_stories:
-        result["reasoning"] = f"Insufficient unique stories ({effective_count} < {config.min_unique_stories})"
+        result["reasoning"] = (
+            f"Insufficient unique stories ({effective_count} < {config.min_unique_stories})"
+        )
         return result
 
     # Gate 2: Minimum relevance (must be about the event)
     if signal.relevance < config.min_relevance:
-        result["reasoning"] = f"Low relevance ({signal.relevance:.2f} < {config.min_relevance})"
+        result["reasoning"] = (
+            f"Low relevance ({signal.relevance:.2f} < {config.min_relevance})"
+        )
         return result
 
     # Gate 3: Baseline frequency check (skip if normal volume for this entity)
-    if signal.frequency_ratio < config.baseline_ratio_threshold and signal.baseline_frequency > 0:
+    if (
+        signal.frequency_ratio < config.baseline_ratio_threshold
+        and signal.baseline_frequency > 0
+    ):
         result["reasoning"] = (
             f"Normal volume ({signal.current_frequency:.0f} vs baseline {signal.baseline_frequency:.0f})"
         )
@@ -504,7 +614,9 @@ def calculate_signal_influence(
 
     # Calculate adjustment magnitude based on strength and relevance
     # Max adjustment is ±15% of probability
-    adjustment_magnitude = signal.strength * signal.relevance * config.max_probability_adjustment
+    adjustment_magnitude = (
+        signal.strength * signal.relevance * config.max_probability_adjustment
+    )
 
     if signal_aligns:
         result["signal_direction"] = "aligned"
@@ -517,8 +629,10 @@ def calculate_signal_influence(
 
         # Check for skip override (strong aligned signal)
         if config.enable_skip_override:
-            if (signal.strength >= config.skip_override_min_strength and
-                effective_count >= config.skip_override_min_sources):
+            if (
+                signal.strength >= config.skip_override_min_strength
+                and effective_count >= config.skip_override_min_sources
+            ):
                 result["should_override_skip"] = True
 
         result["reasoning"] = (
@@ -584,7 +698,7 @@ class TrendRadarClient:
         "bloomberg-markets",
         "nyt-business",
         "nyt-politics",
-        "marketwatch-top"
+        "marketwatch-top",
     ]
 
     # Default retry configuration (can be overridden via constructor)
@@ -606,9 +720,9 @@ class TrendRadarClient:
         circuit_failure_threshold: int = 3,
         circuit_reset_seconds: int = 300,
         openai_api_key: str = None,
-        enable_embeddings: bool = True
+        enable_embeddings: bool = True,
     ):
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip("/")
         self.mcp_endpoint = f"{self.base_url}/mcp"
         self.timeout = timeout
         self.enabled = enabled
@@ -620,14 +734,20 @@ class TrendRadarClient:
         self._request_id: int = 0
 
         # Retry configuration (use provided values or defaults)
-        self.MAX_RETRIES = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
-        self.BASE_BACKOFF = retry_backoff_base if retry_backoff_base is not None else self.DEFAULT_BASE_BACKOFF
+        self.MAX_RETRIES = (
+            max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        )
+        self.BASE_BACKOFF = (
+            retry_backoff_base
+            if retry_backoff_base is not None
+            else self.DEFAULT_BASE_BACKOFF
+        )
         self.MAX_BACKOFF = self.DEFAULT_MAX_BACKOFF
 
         # Circuit breaker
         self._cb_config = CircuitBreakerConfig(
             failure_threshold=circuit_failure_threshold,
-            recovery_timeout=float(circuit_reset_seconds)
+            recovery_timeout=float(circuit_reset_seconds),
         )
         self._cb_state = CircuitBreakerState()
 
@@ -641,7 +761,9 @@ class TrendRadarClient:
 
         # Baseline frequency tracking (Phase 3)
         self._baseline_frequencies: Dict[str, float] = {}  # entity -> 7-day avg
-        self._frequency_history: Dict[str, List[Tuple[float, int]]] = {}  # entity -> [(timestamp, count)]
+        self._frequency_history: Dict[str, List[Tuple[float, int]]] = (
+            {}
+        )  # entity -> [(timestamp, count)]
 
         # Metrics for observability
         self.metrics = {
@@ -652,7 +774,7 @@ class TrendRadarClient:
             "circuit_breaker_rejections": 0,
             "total_latency_ms": 0.0,
             "embedding_requests": 0,
-            "embedding_cache_hits": 0
+            "embedding_cache_hits": 0,
         }
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -663,7 +785,7 @@ class TrendRadarClient:
                 connect=5.0,  # Connection timeout
                 read=self.timeout,  # Read timeout
                 write=10.0,
-                pool=5.0
+                pool=5.0,
             )
             self._client = httpx.AsyncClient(timeout=timeout_config)
         return self._client
@@ -706,12 +828,13 @@ class TrendRadarClient:
             hash_bytes = hashlib.sha256(text.encode()).digest()
             # Use hash bytes to seed a pseudo-random number generator for determinism
             import struct
+
             seed = struct.unpack("<I", hash_bytes[:4])[0]
             rng = random.Random(seed)
             fake_embedding = [rng.gauss(0, 0.1) for _ in range(1536)]
             # Normalize to unit length
-            norm = math.sqrt(sum(x*x for x in fake_embedding))
-            fake_embedding = [x/norm for x in fake_embedding]
+            norm = math.sqrt(sum(x * x for x in fake_embedding))
+            fake_embedding = [x / norm for x in fake_embedding]
             self._embedding_cache[cache_key] = fake_embedding
             logger.debug(f"OFFLINE_MODE: Returning mock embedding for '{text[:50]}...'")
             return fake_embedding
@@ -724,12 +847,12 @@ class TrendRadarClient:
                 "https://api.openai.com/v1/embeddings",
                 headers={
                     "Authorization": f"Bearer {self.openai_api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "model": self.EMBEDDING_MODEL,
-                    "input": text[:8000]  # Truncate to model limit
-                }
+                    "input": text[:8000],  # Truncate to model limit
+                },
             )
             response.raise_for_status()
             data = response.json()
@@ -757,9 +880,7 @@ class TrendRadarClient:
         return dot_product / (norm1 * norm2)
 
     async def calculate_relevance(
-        self,
-        event_title: str,
-        headlines: List[str]
+        self, event_title: str, headlines: List[str]
     ) -> float:
         """
         Calculate semantic relevance of headlines to event using embeddings.
@@ -779,7 +900,9 @@ class TrendRadarClient:
                 for headline in headlines[:5]:
                     headline_embedding = await self._get_embedding(headline)
                     if headline_embedding:
-                        sim = self._cosine_similarity(event_embedding, headline_embedding)
+                        sim = self._cosine_similarity(
+                            event_embedding, headline_embedding
+                        )
                         # Clamp to [0, 1] - negative similarity means no relevance
                         similarities.append(max(0.0, sim))
 
@@ -820,7 +943,8 @@ class TrendRadarClient:
         # This prevents the current observation from inflating its own baseline
         cutoff = now - (7 * 24 * 60 * 60)
         historical = [
-            (ts, count) for ts, count in self._frequency_history[entity_lower]
+            (ts, count)
+            for ts, count in self._frequency_history[entity_lower]
             if ts > cutoff
         ]
 
@@ -832,7 +956,9 @@ class TrendRadarClient:
         # NOW add current observation for future baseline calculations
         self._frequency_history[entity_lower] = historical + [(now, current_count)]
 
-    def get_frequency_ratio(self, entity: str, current_count: int) -> Tuple[float, float, float]:
+    def get_frequency_ratio(
+        self, entity: str, current_count: int
+    ) -> Tuple[float, float, float]:
         """
         Get the frequency ratio for an entity vs its baseline.
 
@@ -862,8 +988,8 @@ class TrendRadarClient:
 
         Returns the parsed JSON data or None if invalid.
         """
-        for line in text.strip().split('\n'):
-            if line.startswith('data: '):
+        for line in text.strip().split("\n"):
+            if line.startswith("data: "):
                 json_str = line[6:]  # Remove 'data: ' prefix
                 try:
                     return json.loads(json_str)
@@ -893,11 +1019,8 @@ class TrendRadarClient:
                 "params": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {
-                        "name": "kalshi-trading-bot",
-                        "version": "1.0.0"
-                    }
-                }
+                    "clientInfo": {"name": "kalshi-trading-bot", "version": "1.0.0"},
+                },
             }
 
             response = await client.post(
@@ -905,8 +1028,8 @@ class TrendRadarClient:
                 json=init_payload,
                 headers={
                     "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream"
-                }
+                    "Accept": "application/json, text/event-stream",
+                },
             )
             response.raise_for_status()
 
@@ -926,7 +1049,7 @@ class TrendRadarClient:
             # Note: Notifications don't have an "id" field per JSON-RPC spec
             initialized_payload = {
                 "jsonrpc": "2.0",
-                "method": "notifications/initialized"
+                "method": "notifications/initialized",
             }
 
             await client.post(
@@ -935,8 +1058,8 @@ class TrendRadarClient:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
-                    "mcp-session-id": self._session_id
-                }
+                    "mcp-session-id": self._session_id,
+                },
             )
 
             self._session_initialized = True
@@ -947,7 +1070,9 @@ class TrendRadarClient:
             logger.warning(f"TrendRadar session initialization failed: {e}")
             return False
 
-    async def _call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_tool(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Call a TrendRadar MCP tool via HTTP with retry and circuit breaker.
 
         FastMCP 2.0 HTTP transport uses JSON-RPC style calls with session management.
@@ -964,14 +1089,16 @@ class TrendRadarClient:
             if tool_name in ("search_rss", "aggregate_news"):
                 # Return deterministic mock news articles based on keyword hash
                 keywords = arguments.get("keywords", arguments.get("keyword", "test"))
-                hash_seed = int(hashlib.md5(keywords.encode()).hexdigest()[:8], 16) % 1000
+                hash_seed = (
+                    int(hashlib.md5(keywords.encode()).hexdigest()[:8], 16) % 1000
+                )
                 mock_articles = [
                     {
                         "title": f"Mock headline about {keywords} - article {i+1}",
                         "description": f"This is a mock article about {keywords} for offline testing.",
                         "source": ["reuters", "bloomberg", "cnbc", "ap-news"][i % 4],
                         "link": f"https://mock.news/article/{hash_seed + i}",
-                        "published": "2024-01-01T12:00:00Z"
+                        "published": "2024-01-01T12:00:00Z",
                     }
                     for i in range(3)
                 ]
@@ -979,14 +1106,14 @@ class TrendRadarClient:
                     "success": True,
                     "articles": mock_articles,
                     "total_count": len(mock_articles),
-                    "clusters": [{"size": 3, "articles": mock_articles}]
+                    "clusters": [{"size": 3, "articles": mock_articles}],
                 }
             elif tool_name == "analyze_sentiment":
                 return {
                     "success": True,
                     "sentiment": "neutral",
                     "confidence": 0.5,
-                    "analysis": "Mock sentiment analysis for offline testing"
+                    "analysis": "Mock sentiment analysis for offline testing",
                 }
             else:
                 return {"success": True, "mock": True}
@@ -1018,10 +1145,7 @@ class TrendRadarClient:
                     "jsonrpc": "2.0",
                     "id": self._next_request_id(),
                     "method": "tools/call",
-                    "params": {
-                        "name": tool_name,
-                        "arguments": arguments
-                    }
+                    "params": {"name": tool_name, "arguments": arguments},
                 }
 
                 response = await client.post(
@@ -1030,8 +1154,8 @@ class TrendRadarClient:
                     headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json, text/event-stream",
-                        "mcp-session-id": self._session_id
-                    }
+                        "mcp-session-id": self._session_id,
+                    },
                 )
                 response.raise_for_status()
 
@@ -1056,7 +1180,9 @@ class TrendRadarClient:
                         # Success - record metrics and reset circuit breaker
                         self._cb_state.record_success()
                         self.metrics["successful_requests"] += 1
-                        self.metrics["total_latency_ms"] += (time.time() - start_time) * 1000
+                        self.metrics["total_latency_ms"] += (
+                            time.time() - start_time
+                        ) * 1000
                         return parsed
 
                 # Check for error in result
@@ -1082,7 +1208,10 @@ class TrendRadarClient:
                     self._session_initialized = False
                     self._session_id = None
                 # Don't retry on most 4xx client errors
-                if 400 <= e.response.status_code < 500 and e.response.status_code != 406:
+                if (
+                    400 <= e.response.status_code < 500
+                    and e.response.status_code != 406
+                ):
                     break
             except httpx.ConnectError:
                 last_error = "Connection failed"
@@ -1097,17 +1226,21 @@ class TrendRadarClient:
 
             # Exponential backoff with jitter before retry
             if attempt < self.MAX_RETRIES - 1:
-                backoff = min(self.BASE_BACKOFF * (2 ** attempt), self.MAX_BACKOFF)
+                backoff = min(self.BASE_BACKOFF * (2**attempt), self.MAX_BACKOFF)
                 jitter = random.uniform(0, backoff * 0.3)
                 wait_time = backoff + jitter
-                logger.debug(f"TrendRadar retry {attempt + 1}/{self.MAX_RETRIES} after {wait_time:.2f}s: {last_error}")
+                logger.debug(
+                    f"TrendRadar retry {attempt + 1}/{self.MAX_RETRIES} after {wait_time:.2f}s: {last_error}"
+                )
                 await asyncio.sleep(wait_time)
 
         # All retries exhausted - record failure
         self._cb_state.record_failure(self._cb_config)
         self.metrics["failed_requests"] += 1
         self.metrics["total_latency_ms"] += (time.time() - start_time) * 1000
-        logger.warning(f"TrendRadar {tool_name} failed after {self.MAX_RETRIES} attempts: {last_error}")
+        logger.warning(
+            f"TrendRadar {tool_name} failed after {self.MAX_RETRIES} attempts: {last_error}"
+        )
         return {"success": False, "error": last_error or "Unknown error"}
 
     async def health_check(self) -> bool:
@@ -1121,10 +1254,7 @@ class TrendRadarClient:
             return False
 
     async def get_trending_topics(
-        self,
-        top_n: int = 20,
-        mode: str = "current",
-        extract_mode: str = "auto_extract"
+        self, top_n: int = 20, mode: str = "current", extract_mode: str = "auto_extract"
     ) -> List[Dict[str, Any]]:
         """Get trending topics from TrendRadar.
 
@@ -1133,22 +1263,17 @@ class TrendRadarClient:
             mode: "current" for latest batch, "daily" for full day
             extract_mode: "auto_extract" for automatic keyword discovery
         """
-        result = await self._call_tool("get_trending_topics", {
-            "top_n": top_n,
-            "mode": mode,
-            "extract_mode": extract_mode
-        })
+        result = await self._call_tool(
+            "get_trending_topics",
+            {"top_n": top_n, "mode": mode, "extract_mode": extract_mode},
+        )
 
         if result.get("success", True) and "error" not in result:
             return result.get("topics", [])
         return []
 
     async def search_news(
-        self,
-        query: str,
-        include_rss: bool = True,
-        limit: int = 50,
-        rss_limit: int = 30
+        self, query: str, include_rss: bool = True, limit: int = 50, rss_limit: int = 30
     ) -> Dict[str, Any]:
         """Search news across hot topics and RSS feeds.
 
@@ -1158,41 +1283,35 @@ class TrendRadarClient:
             limit: Max hot topic results
             rss_limit: Max RSS results
         """
-        result = await self._call_tool("search_news", {
-            "query": query,
-            "search_mode": "keyword",
-            "include_rss": include_rss,
-            "limit": limit,
-            "rss_limit": rss_limit,
-            "include_url": False
-        })
+        result = await self._call_tool(
+            "search_news",
+            {
+                "query": query,
+                "search_mode": "keyword",
+                "include_rss": include_rss,
+                "limit": limit,
+                "rss_limit": rss_limit,
+                "include_url": False,
+            },
+        )
 
         return result
 
-    async def analyze_sentiment(
-        self,
-        topic: str,
-        limit: int = 30
-    ) -> Dict[str, Any]:
+    async def analyze_sentiment(self, topic: str, limit: int = 30) -> Dict[str, Any]:
         """Analyze sentiment for a topic.
 
         Args:
             topic: Topic keyword to analyze
             limit: Max news items to analyze
         """
-        result = await self._call_tool("analyze_sentiment", {
-            "topic": topic,
-            "limit": limit,
-            "include_url": False
-        })
+        result = await self._call_tool(
+            "analyze_sentiment", {"topic": topic, "limit": limit, "include_url": False}
+        )
 
         return result
 
     async def get_latest_rss(
-        self,
-        feeds: List[str] = None,
-        limit: int = 50,
-        include_summary: bool = True
+        self, feeds: List[str] = None, limit: int = 50, include_summary: bool = True
     ) -> Dict[str, Any]:
         """Get latest RSS feed entries.
 
@@ -1204,20 +1323,15 @@ class TrendRadarClient:
         if feeds is None:
             feeds = self.WESTERN_FINANCIAL_FEEDS
 
-        result = await self._call_tool("get_latest_rss", {
-            "feeds": feeds,
-            "limit": limit,
-            "include_summary": include_summary
-        })
+        result = await self._call_tool(
+            "get_latest_rss",
+            {"feeds": feeds, "limit": limit, "include_summary": include_summary},
+        )
 
         return result
 
     async def search_rss(
-        self,
-        keyword: str,
-        feeds: List[str] = None,
-        days: int = 3,
-        limit: int = 30
+        self, keyword: str, feeds: List[str] = None, days: int = 3, limit: int = 30
     ) -> Dict[str, Any]:
         """Search RSS feeds for keyword.
 
@@ -1230,21 +1344,21 @@ class TrendRadarClient:
         if feeds is None:
             feeds = self.WESTERN_FINANCIAL_FEEDS
 
-        result = await self._call_tool("search_rss", {
-            "keyword": keyword,
-            "feeds": feeds,
-            "days": days,
-            "limit": limit,
-            "include_summary": True
-        })
+        result = await self._call_tool(
+            "search_rss",
+            {
+                "keyword": keyword,
+                "feeds": feeds,
+                "days": days,
+                "limit": limit,
+                "include_summary": True,
+            },
+        )
 
         return result
 
     async def get_signals_for_event(
-        self,
-        event_title: str,
-        event_category: str = "",
-        keywords: List[str] = None
+        self, event_title: str, event_category: str = "", keywords: List[str] = None
     ) -> List[TrendingSignal]:
         """Get trending signals relevant to a prediction market event.
 
@@ -1284,24 +1398,17 @@ class TrendRadarClient:
         for term in search_terms[:3]:
             try:
                 # Search RSS for this term
-                rss_result = await self.search_rss(
-                    keyword=term,
-                    days=2,
-                    limit=20
-                )
+                rss_result = await self.search_rss(keyword=term, days=2, limit=20)
 
                 # Get sentiment analysis (may not be available for all terms)
-                sentiment_result = await self.analyze_sentiment(
-                    topic=term,
-                    limit=20
-                )
+                sentiment_result = await self.analyze_sentiment(topic=term, limit=20)
 
                 # Parse into signal if we have data
                 signal = self._parse_signal(
                     term=term,
                     rss_result=rss_result,
                     sentiment_result=sentiment_result,
-                    event_title=event_title  # Pass for relevance calculation
+                    event_title=event_title,  # Pass for relevance calculation
                 )
 
                 # Use unique_story_count (after de-dup) instead of raw source_count
@@ -1309,8 +1416,7 @@ class TrendRadarClient:
                     # Phase 2: Calculate semantic relevance with embeddings
                     if self.enable_embeddings and signal.sample_headlines:
                         relevance = await self.calculate_relevance(
-                            event_title=event_title,
-                            headlines=signal.sample_headlines
+                            event_title=event_title, headlines=signal.sample_headlines
                         )
                         signal.relevance = relevance
 
@@ -1321,12 +1427,14 @@ class TrendRadarClient:
                             novelty=signal.novelty,
                             sentiment_confidence=signal.sentiment_confidence,
                             neutral_ratio=signal.neutral_ratio,
-                            tier1_count=signal.tier1_outlet_count
+                            tier1_count=signal.tier1_outlet_count,
                         )
 
                     # Phase 3: Update baseline frequency tracking
                     self.update_baseline_frequency(term, signal.unique_story_count)
-                    baseline, current, ratio = self.get_frequency_ratio(term, signal.unique_story_count)
+                    baseline, current, ratio = self.get_frequency_ratio(
+                        term, signal.unique_story_count
+                    )
                     signal.baseline_frequency = baseline
                     signal.current_frequency = current
                     signal.frequency_ratio = ratio
@@ -1342,19 +1450,63 @@ class TrendRadarClient:
         return signals
 
     def _extract_search_terms(
-        self,
-        event_title: str,
-        additional_keywords: List[str] = None
+        self, event_title: str, additional_keywords: List[str] = None
     ) -> List[str]:
         """Extract meaningful search terms from event title."""
         # Common stopwords to filter
         stopwords = {
-            'will', 'the', 'be', 'a', 'an', 'of', 'and', 'or', 'for', 'to',
-            'in', 'on', 'at', 'by', 'with', 'is', 'are', 'was', 'were', 'has',
-            'have', 'been', 'being', 'this', 'that', 'which', 'who', 'whom',
-            'what', 'when', 'where', 'how', 'why', 'before', 'after', 'during',
-            'yes', 'no', 'win', 'winner', 'election', 'vote', 'votes', 'than',
-            'more', 'less', 'most', 'least', 'any', 'all', 'some', 'each'
+            "will",
+            "the",
+            "be",
+            "a",
+            "an",
+            "of",
+            "and",
+            "or",
+            "for",
+            "to",
+            "in",
+            "on",
+            "at",
+            "by",
+            "with",
+            "is",
+            "are",
+            "was",
+            "were",
+            "has",
+            "have",
+            "been",
+            "being",
+            "this",
+            "that",
+            "which",
+            "who",
+            "whom",
+            "what",
+            "when",
+            "where",
+            "how",
+            "why",
+            "before",
+            "after",
+            "during",
+            "yes",
+            "no",
+            "win",
+            "winner",
+            "election",
+            "vote",
+            "votes",
+            "than",
+            "more",
+            "less",
+            "most",
+            "least",
+            "any",
+            "all",
+            "some",
+            "each",
         }
 
         terms = []
@@ -1364,25 +1516,29 @@ class TrendRadarClient:
         original_words = event_title.split()
         phrase = []
         for word in original_words:
-            clean_word = word.strip('.,!?()[]{}"\'-:;')
-            if clean_word and clean_word[0].isupper() and clean_word.lower() not in stopwords:
+            clean_word = word.strip(".,!?()[]{}\"'-:;")
+            if (
+                clean_word
+                and clean_word[0].isupper()
+                and clean_word.lower() not in stopwords
+            ):
                 phrase.append(clean_word)
             elif phrase:
                 if len(phrase) >= 2:
-                    terms.append(' '.join(phrase))
+                    terms.append(" ".join(phrase))
                 elif len(phrase) == 1 and len(phrase[0]) > 3:
                     terms.append(phrase[0])
                 phrase = []
         if phrase:
             if len(phrase) >= 2:
-                terms.append(' '.join(phrase))
+                terms.append(" ".join(phrase))
             elif len(phrase) == 1 and len(phrase[0]) > 3:
                 terms.append(phrase[0])
 
         # Add single significant words
         words = event_title.lower().split()
         for word in words:
-            clean = word.strip('.,!?()[]{}"\'-:;')
+            clean = word.strip(".,!?()[]{}\"'-:;")
             if len(clean) > 3 and clean not in stopwords:
                 terms.append(clean)
 
@@ -1406,7 +1562,7 @@ class TrendRadarClient:
         term: str,
         rss_result: Dict[str, Any],
         sentiment_result: Dict[str, Any],
-        event_title: str = ""
+        event_title: str = "",
     ) -> Optional[TrendingSignal]:
         """
         Parse TrendRadar results into a TrendingSignal with quality metrics (v2).
@@ -1424,22 +1580,32 @@ class TrendRadarClient:
 
         news_items = []
         if isinstance(sentiment_result, dict):
-            news_items = sentiment_result.get("news", []) or sentiment_result.get("news_sample", []) or []
+            news_items = (
+                sentiment_result.get("news", [])
+                or sentiment_result.get("news_sample", [])
+                or []
+            )
 
         # Combine all items with their sources
         all_items = []
         for item in rss_items:
-            all_items.append({
-                "title": item.get("title", ""),
-                "source": item.get("feed_name", "") or item.get("feed", "") or item.get("feed_id", ""),
-                "type": "rss"
-            })
+            all_items.append(
+                {
+                    "title": item.get("title", ""),
+                    "source": item.get("feed_name", "")
+                    or item.get("feed", "")
+                    or item.get("feed_id", ""),
+                    "type": "rss",
+                }
+            )
         for item in news_items:
-            all_items.append({
-                "title": item.get("title", ""),
-                "source": item.get("platform", "") or item.get("source", ""),
-                "type": "news"
-            })
+            all_items.append(
+                {
+                    "title": item.get("title", ""),
+                    "source": item.get("platform", "") or item.get("source", ""),
+                    "type": "news",
+                }
+            )
 
         raw_article_count = len(all_items)
         if raw_article_count == 0:
@@ -1462,7 +1628,9 @@ class TrendRadarClient:
                 title_words = set(title.split())
                 cluster_words = set(cluster["representative"].lower().split())
                 if len(title_words) > 0 and len(cluster_words) > 0:
-                    overlap = len(title_words & cluster_words) / min(len(title_words), len(cluster_words))
+                    overlap = len(title_words & cluster_words) / min(
+                        len(title_words), len(cluster_words)
+                    )
                     if overlap > 0.6:  # 60% word overlap = same story
                         cluster["items"].append(item)
                         cluster["sources"].add(item["source"])
@@ -1471,11 +1639,13 @@ class TrendRadarClient:
 
             if not found_cluster:
                 # New unique story
-                story_clusters.append({
-                    "representative": item["title"],
-                    "items": [item],
-                    "sources": {item["source"]}
-                })
+                story_clusters.append(
+                    {
+                        "representative": item["title"],
+                        "items": [item],
+                        "sources": {item["source"]},
+                    }
+                )
 
         unique_story_count = len(story_clusters)
         story_cluster_sizes = [len(c["items"]) for c in story_clusters]
@@ -1532,7 +1702,9 @@ class TrendRadarClient:
 
         # Sentiment confidence = average confidence * clarity
         avg_confidence = total_confidence / total_votes if total_votes > 0 else 0.5
-        clarity = abs(positive_votes - negative_votes) / max(positive_votes + negative_votes, 1)
+        clarity = abs(positive_votes - negative_votes) / max(
+            positive_votes + negative_votes, 1
+        )
         sentiment_confidence = avg_confidence * (0.5 + clarity * 0.5)
 
         # Neutral ratio
@@ -1559,7 +1731,7 @@ class TrendRadarClient:
             novelty=novelty,
             sentiment_confidence=sentiment_confidence,
             neutral_ratio=neutral_ratio,
-            tier1_count=tier1_outlet_count
+            tier1_count=tier1_outlet_count,
         )
 
         return TrendingSignal(
@@ -1567,11 +1739,9 @@ class TrendRadarClient:
             sentiment=sentiment_dir,
             strength=strength,
             source_count=raw_article_count,  # DEPRECATED: kept for backwards compat
-
             # Headlines and sources
             sample_headlines=headlines[:5],
             platforms=platforms,
-
             # NEW: De-duplication metrics
             raw_article_count=raw_article_count,
             unique_story_count=unique_story_count,
@@ -1579,12 +1749,11 @@ class TrendRadarClient:
             tier1_outlet_count=tier1_outlet_count,
             tier2_outlet_count=tier2_outlet_count,
             story_cluster_sizes=story_cluster_sizes,
-
             # NEW: Quality metrics
             relevance=relevance,
             novelty=novelty,
             sentiment_confidence=sentiment_confidence,
-            neutral_ratio=neutral_ratio
+            neutral_ratio=neutral_ratio,
         )
 
 
@@ -1595,7 +1764,11 @@ def format_signals_for_research(signals: List[TrendingSignal]) -> str:
 
     lines = []
     for sig in signals:
-        emoji = "+" if sig.sentiment == "positive" else "-" if sig.sentiment == "negative" else "~"
+        emoji = (
+            "+"
+            if sig.sentiment == "positive"
+            else "-" if sig.sentiment == "negative" else "~"
+        )
 
         # Show de-duplication ratio if significant
         dedup_info = ""

@@ -1,9 +1,11 @@
 """
 Quick test of Dashboard API position endpoints.
 """
+
 import asyncio
-import httpx
 import sys
+
+import httpx
 
 
 async def test_api():
@@ -39,7 +41,9 @@ async def test_api():
 
             # Test /api/positions/near-triggers
             print("\n3. GET /api/positions/near-triggers")
-            resp = await client.get(f"{base_url}/api/positions/near-triggers?threshold_pct=0.05")
+            resp = await client.get(
+                f"{base_url}/api/positions/near-triggers?threshold_pct=0.05"
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 print(f"   Status: OK")

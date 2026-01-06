@@ -2,6 +2,7 @@
 Combined server that runs both the Dashboard API and the Trading Bot.
 This is the main entry point for Render deployment.
 """
+
 import asyncio
 import os
 import sys
@@ -11,9 +12,11 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+
 def run_trading_bot():
     """Run the trading bot in a separate thread."""
     import asyncio
+
     from continuous_bot import ContinuousTradingBot
 
     # Check if live trading is enabled via environment variable
@@ -47,12 +50,7 @@ def main():
 
     # Run the dashboard API (this binds to the port Render expects)
     print(f"Starting Dashboard API on port {port}")
-    uvicorn.run(
-        "dashboard.api:app",
-        host="0.0.0.0",
-        port=port,
-        log_level="info"
-    )
+    uvicorn.run("dashboard.api:app", host="0.0.0.0", port=port, log_level="info")
 
 
 if __name__ == "__main__":

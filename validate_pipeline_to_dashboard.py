@@ -20,14 +20,14 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 import sys
 import time
-import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 # Change to project directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,10 +35,11 @@ os.chdir(script_dir)
 
 try:
     from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.live import Live
     from rich.layout import Layout
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+
     console = Console()
 except ImportError:
     console = None
@@ -64,8 +65,16 @@ class PipelineTestResult:
 
 def print_step(step: str, status: TestStatus, message: str):
     if console:
-        color = {"PASS": "green", "FAIL": "red", "WARN": "yellow", "SKIP": "dim", "RUNNING": "cyan"}
-        console.print(f"  [{color.get(status.name, 'white')}]{status.value}[/] {step}: {message}")
+        color = {
+            "PASS": "green",
+            "FAIL": "red",
+            "WARN": "yellow",
+            "SKIP": "dim",
+            "RUNNING": "cyan",
+        }
+        console.print(
+            f"  [{color.get(status.name, 'white')}]{status.value}[/] {step}: {message}"
+        )
     else:
         print(f"  {status.value} {step}: {message}")
 
@@ -74,19 +83,17 @@ def print_step(step: str, status: TestStatus, message: str):
 # STEP 1: Market Data Collection
 # =============================================================================
 
+
 async def test_market_collection() -> PipelineTestResult:
     """Test that we can collect events and markets from Kalshi."""
     start = time.perf_counter()
 
     try:
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
 
         config = BotConfig()
-        client = KalshiClient(
-            config.kalshi,
-            early_entry_config=config.early_entry
-        )
+        client = KalshiClient(config.kalshi, early_entry_config=config.early_entry)
         await client.login()
 
         # Fetch events with early entry scoring
@@ -98,7 +105,7 @@ async def test_market_collection() -> PipelineTestResult:
                 "Market Collection",
                 TestStatus.FAIL,
                 "No events returned from Kalshi API",
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
         # Check that events have markets
@@ -115,9 +122,9 @@ async def test_market_collection() -> PipelineTestResult:
                 "events_count": len(events),
                 "markets_count": total_markets,
                 "events_with_scores": events_with_scores,
-                "sample_event": events[0].get("event_ticker") if events else None
+                "sample_event": events[0].get("event_ticker") if events else None,
             },
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
     except Exception as e:
@@ -125,7 +132,7 @@ async def test_market_collection() -> PipelineTestResult:
             "Market Collection",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
@@ -133,13 +140,14 @@ async def test_market_collection() -> PipelineTestResult:
 # STEP 2: Early Entry Scoring
 # =============================================================================
 
+
 async def test_early_entry_scoring() -> PipelineTestResult:
     """Test that early entry scoring is working correctly."""
     start = time.perf_counter()
 
     try:
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
 
         config = BotConfig()
 
@@ -148,13 +156,10 @@ async def test_early_entry_scoring() -> PipelineTestResult:
                 "Early Entry Scoring",
                 TestStatus.SKIP,
                 "Early entry scoring is disabled in config",
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
-        client = KalshiClient(
-            config.kalshi,
-            early_entry_config=config.early_entry
-        )
+        client = KalshiClient(config.kalshi, early_entry_config=config.early_entry)
         await client.login()
 
         # Create test data to verify scoring
@@ -163,13 +168,13 @@ async def test_early_entry_scoring() -> PipelineTestResult:
             "event_ticker": "TEST-VALIDATION",
             "series_ticker": None,  # Unique event
             "strike_period": None,
-            "time_remaining_hours": 72.0
+            "time_remaining_hours": 72.0,
         }
         test_market = {
             "ticker": "TEST-M1",
             "volume_24h": 500,
             "open_time": now.isoformat(),
-            "created_time": now.isoformat()
+            "created_time": now.isoformat(),
         }
 
         # Test unique detection
@@ -189,8 +194,8 @@ async def test_early_entry_scoring() -> PipelineTestResult:
                 "low_volume_weight": config.early_entry.low_volume_weight,
                 "time_remaining_weight": config.early_entry.time_remaining_weight,
                 "unique_event_bonus": config.early_entry.unique_event_bonus,
-                "new_market_bonus": config.early_entry.new_market_bonus
-            }
+                "new_market_bonus": config.early_entry.new_market_bonus,
+            },
         }
 
         if score > 0:
@@ -199,7 +204,7 @@ async def test_early_entry_scoring() -> PipelineTestResult:
                 TestStatus.PASS,
                 f"Score: {score:.2f} (unique={is_unique}, new_market={test_market.get('is_new_market', False)})",
                 data=scoring_breakdown,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
         else:
             return PipelineTestResult(
@@ -207,7 +212,7 @@ async def test_early_entry_scoring() -> PipelineTestResult:
                 TestStatus.WARN,
                 f"Score is 0 - check scoring weights",
                 data=scoring_breakdown,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
     except Exception as e:
@@ -215,13 +220,14 @@ async def test_early_entry_scoring() -> PipelineTestResult:
             "Early Entry Scoring",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # STEP 3: Research Integration (OpenAI)
 # =============================================================================
+
 
 async def test_research_integration() -> PipelineTestResult:
     """Test that OpenAI research integration is working."""
@@ -238,7 +244,7 @@ async def test_research_integration() -> PipelineTestResult:
                 "Research Integration",
                 TestStatus.FAIL,
                 "OpenAI API key not configured",
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
         client = AsyncOpenAI(api_key=config.openai.api_key)
@@ -247,7 +253,7 @@ async def test_research_integration() -> PipelineTestResult:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "Respond with just 'OK'"}],
-            max_tokens=5
+            max_tokens=5,
         )
 
         if response.choices and response.choices[0].message.content:
@@ -257,16 +263,16 @@ async def test_research_integration() -> PipelineTestResult:
                 f"OpenAI API responding - Model: {config.openai.model}",
                 data={
                     "model": config.openai.model,
-                    "response": response.choices[0].message.content[:50]
+                    "response": response.choices[0].message.content[:50],
                 },
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
         return PipelineTestResult(
             "Research Integration",
             TestStatus.WARN,
             "OpenAI responded but with empty content",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
     except Exception as e:
@@ -274,13 +280,14 @@ async def test_research_integration() -> PipelineTestResult:
             "Research Integration",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # STEP 4: Decision Generation
 # =============================================================================
+
 
 async def test_decision_generation() -> PipelineTestResult:
     """Test that the decision engine generates properly structured decisions."""
@@ -306,15 +313,20 @@ async def test_decision_generation() -> PipelineTestResult:
             kelly_fraction=0.31,
             market_price=0.55,
             research_probability=0.72,
-            signal_applied=False
+            signal_applied=False,
         )
 
         # Convert to dict to verify serialization
         decision_dict = sample_decision.model_dump()
 
         required_fields = [
-            "ticker", "action", "confidence", "amount",
-            "reasoning", "r_score", "kelly_fraction"
+            "ticker",
+            "action",
+            "confidence",
+            "amount",
+            "reasoning",
+            "r_score",
+            "kelly_fraction",
         ]
 
         missing = [f for f in required_fields if f not in decision_dict]
@@ -324,7 +336,7 @@ async def test_decision_generation() -> PipelineTestResult:
                 "Decision Generation",
                 TestStatus.FAIL,
                 f"Missing required fields: {missing}",
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
         return PipelineTestResult(
@@ -337,11 +349,11 @@ async def test_decision_generation() -> PipelineTestResult:
                     "action": decision_dict["action"],
                     "r_score": decision_dict.get("r_score"),
                     "confidence": decision_dict["confidence"],
-                    "amount": decision_dict["amount"]
+                    "amount": decision_dict["amount"],
                 },
-                "total_fields": len(decision_dict)
+                "total_fields": len(decision_dict),
             },
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
     except Exception as e:
@@ -349,7 +361,7 @@ async def test_decision_generation() -> PipelineTestResult:
             "Decision Generation",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
@@ -357,22 +369,23 @@ async def test_decision_generation() -> PipelineTestResult:
 # STEP 5: Dashboard Broadcasting
 # =============================================================================
 
+
 async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestResult:
     """Test that we can broadcast to the dashboard."""
     start = time.perf_counter()
 
     try:
         import httpx
-        from dashboard.broadcaster import (
-            broadcast_decision, broadcast_cli_log,
-            broadcast_account_update, broadcast_kpi_update,
-            DASHBOARD_API_URL
-        )
+        from dashboard.broadcaster import (DASHBOARD_API_URL,
+                                           broadcast_account_update,
+                                           broadcast_cli_log,
+                                           broadcast_decision,
+                                           broadcast_kpi_update)
 
         results = {
             "dashboard_url": DASHBOARD_API_URL,
             "endpoints_tested": [],
-            "broadcasts_sent": 0
+            "broadcasts_sent": 0,
         }
 
         # Check if dashboard is reachable
@@ -385,7 +398,7 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                         TestStatus.WARN,
                         f"Dashboard not healthy: {response.status_code}",
                         data=results,
-                        duration_ms=(time.perf_counter() - start) * 1000
+                        duration_ms=(time.perf_counter() - start) * 1000,
                     )
         except httpx.ConnectError:
             return PipelineTestResult(
@@ -393,7 +406,7 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                 TestStatus.SKIP,
                 f"Dashboard not reachable at {DASHBOARD_API_URL}",
                 data=results,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
         if live_test:
@@ -404,7 +417,10 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                 level="info",
                 message="🧪 VALIDATION TEST: Pipeline validation running",
                 source="validator",
-                details={"test": True, "timestamp": datetime.now(timezone.utc).isoformat()}
+                details={
+                    "test": True,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
             )
             results["endpoints_tested"].append(("cli_log", cli_success))
             if cli_success:
@@ -418,7 +434,7 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                 "market_title": "Pipeline Validation Test",
                 "confidence": 0.0,
                 "r_score": 0.0,
-                "reasoning": "This is a test decision from pipeline validation"
+                "reasoning": "This is a test decision from pipeline validation",
             }
             decision_success = await broadcast_decision(test_decision)
             results["endpoints_tested"].append(("decision", decision_success))
@@ -436,7 +452,7 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                 TestStatus.PASS if results["broadcasts_sent"] >= 2 else TestStatus.WARN,
                 f"Sent {results['broadcasts_sent']}/3 broadcasts to {DASHBOARD_API_URL}",
                 data=results,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
         else:
             # Just verify endpoints exist
@@ -445,13 +461,15 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                     "/api/broadcast/decision",
                     "/api/broadcast/cli_log",
                     "/api/broadcast/account",
-                    "/api/broadcast/kpis"
+                    "/api/broadcast/kpis",
                 ]
 
                 for endpoint in endpoints:
                     try:
                         # OPTIONS request to check if endpoint exists
-                        response = await client.options(f"{DASHBOARD_API_URL}{endpoint}")
+                        response = await client.options(
+                            f"{DASHBOARD_API_URL}{endpoint}"
+                        )
                         results["endpoints_tested"].append((endpoint, True))
                     except:
                         results["endpoints_tested"].append((endpoint, False))
@@ -461,7 +479,7 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
                 TestStatus.PASS,
                 f"Dashboard reachable, {len(endpoints)} broadcast endpoints available",
                 data=results,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
     except Exception as e:
@@ -469,13 +487,14 @@ async def test_dashboard_broadcasting(live_test: bool = False) -> PipelineTestRe
             "Dashboard Broadcasting",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # STEP 6: CLI Terminal Display
 # =============================================================================
+
 
 async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResult:
     """Test that CLI terminal logs are being received by dashboard."""
@@ -494,7 +513,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
                     "CLI Terminal Display",
                     TestStatus.WARN,
                     f"Cannot check WS stats: {response.status_code}",
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             ws_stats = response.json()
@@ -505,7 +524,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
             data = {
                 "active_connections": active_connections,
                 "cli_log_subscribers": cli_subscribers,
-                "all_topics": topics
+                "all_topics": topics,
             }
 
             if live_test and active_connections > 0:
@@ -523,7 +542,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
                         level=level,
                         message=message,
                         source="validator",
-                        details={"test": True}
+                        details={"test": True},
                     )
                     await asyncio.sleep(0.2)  # Small delay between messages
 
@@ -534,7 +553,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
                     TestStatus.PASS,
                     f"Sent {len(test_messages)} test logs to {cli_subscribers} CLI subscribers",
                     data=data,
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             if active_connections == 0:
@@ -543,7 +562,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
                     TestStatus.WARN,
                     "No WebSocket clients connected - open dashboard to see logs",
                     data=data,
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             return PipelineTestResult(
@@ -551,7 +570,7 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
                 TestStatus.PASS,
                 f"{active_connections} clients connected, {cli_subscribers} subscribed to CLI logs",
                 data=data,
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
     except httpx.ConnectError:
@@ -559,20 +578,21 @@ async def test_cli_terminal_display(live_test: bool = False) -> PipelineTestResu
             "CLI Terminal Display",
             TestStatus.SKIP,
             "Dashboard not reachable",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
     except Exception as e:
         return PipelineTestResult(
             "CLI Terminal Display",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # STEP 7: Account Data Display
 # =============================================================================
+
 
 async def test_account_data_display() -> PipelineTestResult:
     """Test that real Kalshi account data flows to dashboard."""
@@ -591,7 +611,7 @@ async def test_account_data_display() -> PipelineTestResult:
                     "Account Data Display",
                     TestStatus.FAIL,
                     f"Account endpoint returned {response.status_code}",
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             account_data = response.json()
@@ -606,7 +626,7 @@ async def test_account_data_display() -> PipelineTestResult:
                     TestStatus.WARN,
                     "Dashboard showing account data but API not connected",
                     data=account_data,
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             return PipelineTestResult(
@@ -618,9 +638,9 @@ async def test_account_data_display() -> PipelineTestResult:
                     "portfolio_value": account_data.get("portfolio_value", 0),
                     "total_equity": account_data.get("total_equity", 0),
                     "open_positions": account_data.get("open_positions_count", 0),
-                    "api_connected": account_data.get("api_connected", False)
+                    "api_connected": account_data.get("api_connected", False),
                 },
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
     except httpx.ConnectError:
@@ -628,20 +648,21 @@ async def test_account_data_display() -> PipelineTestResult:
             "Account Data Display",
             TestStatus.SKIP,
             "Dashboard not reachable",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
     except Exception as e:
         return PipelineTestResult(
             "Account Data Display",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # STEP 8: Decision Feed Display
 # =============================================================================
+
 
 async def test_decision_feed_display() -> PipelineTestResult:
     """Test that decisions are displayed in the dashboard feed."""
@@ -660,7 +681,7 @@ async def test_decision_feed_display() -> PipelineTestResult:
                     "Decision Feed Display",
                     TestStatus.FAIL,
                     f"Decisions endpoint returned {response.status_code}",
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             decisions_data = response.json()
@@ -673,7 +694,7 @@ async def test_decision_feed_display() -> PipelineTestResult:
                     TestStatus.WARN,
                     "No decisions in feed yet - run a trading cycle first",
                     data={"total": total},
-                    duration_ms=(time.perf_counter() - start) * 1000
+                    duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
             # Analyze recent decisions
@@ -695,10 +716,10 @@ async def test_decision_feed_display() -> PipelineTestResult:
                     "latest_decision": {
                         "market_ticker": recent_decision.get("market_ticker"),
                         "action": recent_decision.get("action"),
-                        "created_at": recent_decision.get("created_at")
-                    }
+                        "created_at": recent_decision.get("created_at"),
+                    },
                 },
-                duration_ms=(time.perf_counter() - start) * 1000
+                duration_ms=(time.perf_counter() - start) * 1000,
             )
 
     except httpx.ConnectError:
@@ -706,20 +727,21 @@ async def test_decision_feed_display() -> PipelineTestResult:
             "Decision Feed Display",
             TestStatus.SKIP,
             "Dashboard not reachable",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
     except Exception as e:
         return PipelineTestResult(
             "Decision Feed Display",
             TestStatus.FAIL,
             f"Error: {str(e)[:100]}",
-            duration_ms=(time.perf_counter() - start) * 1000
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 # =============================================================================
 # FULL MINI TRADING CYCLE TEST
 # =============================================================================
+
 
 async def run_mini_trading_cycle() -> List[PipelineTestResult]:
     """Run a mini trading cycle and broadcast results to dashboard."""
@@ -729,9 +751,9 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
         console.print(Panel("[bold cyan]Running Mini Trading Cycle[/bold cyan]"))
 
     try:
-        from kalshi_client import KalshiClient
         from config import BotConfig
         from dashboard.broadcaster import broadcast_cli_log, broadcast_decision
+        from kalshi_client import KalshiClient
 
         config = BotConfig()
 
@@ -739,14 +761,14 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
         await broadcast_cli_log(
             level="info",
             message="🚀 Mini trading cycle starting (validation mode)",
-            source="validator"
+            source="validator",
         )
 
         # Step 2: Collect markets
         await broadcast_cli_log(
             level="info",
             message="📡 Fetching markets from Kalshi...",
-            source="validator"
+            source="validator",
         )
 
         client = KalshiClient(config.kalshi, early_entry_config=config.early_entry)
@@ -757,20 +779,22 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
             level="success",
             message=f"✅ Collected {len(events)} events",
             source="validator",
-            details={"events_count": len(events)}
+            details={"events_count": len(events)},
         )
 
-        results.append(PipelineTestResult(
-            "Mini Cycle: Collection",
-            TestStatus.PASS,
-            f"Collected {len(events)} events"
-        ))
+        results.append(
+            PipelineTestResult(
+                "Mini Cycle: Collection",
+                TestStatus.PASS,
+                f"Collected {len(events)} events",
+            )
+        )
 
         # Step 3: Score markets
         await broadcast_cli_log(
             level="info",
             message="📊 Scoring markets with early entry strategy...",
-            source="validator"
+            source="validator",
         )
 
         scored_events = [e for e in events if e.get("early_entry_score", 0) > 0]
@@ -778,14 +802,16 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
         await broadcast_cli_log(
             level="success",
             message=f"✅ Scored {len(scored_events)} events with early entry potential",
-            source="validator"
+            source="validator",
         )
 
-        results.append(PipelineTestResult(
-            "Mini Cycle: Scoring",
-            TestStatus.PASS,
-            f"Scored {len(scored_events)} events"
-        ))
+        results.append(
+            PipelineTestResult(
+                "Mini Cycle: Scoring",
+                TestStatus.PASS,
+                f"Scored {len(scored_events)} events",
+            )
+        )
 
         # Step 4: Generate sample decision
         if events:
@@ -793,14 +819,16 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
             sample_decision = {
                 "decision_id": f"mini-cycle-{datetime.now().strftime('%H%M%S')}",
                 "event_ticker": sample_event.get("event_ticker", "UNKNOWN"),
-                "market_ticker": sample_event.get("markets", [{}])[0].get("ticker", "UNKNOWN"),
+                "market_ticker": sample_event.get("markets", [{}])[0].get(
+                    "ticker", "UNKNOWN"
+                ),
                 "action": "skip",
                 "market_title": sample_event.get("title", "Validation Test")[:50],
                 "confidence": 0.5,
                 "research_probability": 0.5,
                 "market_price": 0.5,
                 "r_score": 0.0,
-                "reasoning": "Mini cycle validation - no actual bet placed"
+                "reasoning": "Mini cycle validation - no actual bet placed",
             }
 
             await broadcast_decision(sample_decision)
@@ -808,20 +836,22 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
             await broadcast_cli_log(
                 level="success",
                 message=f"✅ Decision generated for {sample_decision['event_ticker']}",
-                source="validator"
+                source="validator",
             )
 
-            results.append(PipelineTestResult(
-                "Mini Cycle: Decision",
-                TestStatus.PASS,
-                f"Generated decision for {sample_decision['event_ticker']}"
-            ))
+            results.append(
+                PipelineTestResult(
+                    "Mini Cycle: Decision",
+                    TestStatus.PASS,
+                    f"Generated decision for {sample_decision['event_ticker']}",
+                )
+            )
 
         # Step 5: Complete
         await broadcast_cli_log(
             level="success",
             message="🏁 Mini trading cycle complete",
-            source="validator"
+            source="validator",
         )
 
         await client.close()
@@ -832,13 +862,11 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
         await broadcast_cli_log(
             level="error",
             message=f"❌ Mini cycle failed: {str(e)[:100]}",
-            source="validator"
+            source="validator",
         )
-        results.append(PipelineTestResult(
-            "Mini Cycle",
-            TestStatus.FAIL,
-            f"Error: {str(e)[:100]}"
-        ))
+        results.append(
+            PipelineTestResult("Mini Cycle", TestStatus.FAIL, f"Error: {str(e)[:100]}")
+        )
         return results
 
 
@@ -846,15 +874,18 @@ async def run_mini_trading_cycle() -> List[PipelineTestResult]:
 # Main Execution
 # =============================================================================
 
+
 async def run_pipeline_validation(live_test: bool = False, full_cycle: bool = False):
     """Run complete pipeline validation."""
 
     if console:
-        console.print(Panel(
-            "[bold]PIPELINE-TO-DASHBOARD VALIDATION[/bold]\n"
-            "Testing data flow from collection through dashboard display",
-            style="blue"
-        ))
+        console.print(
+            Panel(
+                "[bold]PIPELINE-TO-DASHBOARD VALIDATION[/bold]\n"
+                "Testing data flow from collection through dashboard display",
+                style="blue",
+            )
+        )
 
     all_results = []
 
@@ -909,37 +940,41 @@ async def run_pipeline_validation(live_test: bool = False, full_cycle: bool = Fa
                 TestStatus.PASS: "green",
                 TestStatus.FAIL: "red",
                 TestStatus.WARN: "yellow",
-                TestStatus.SKIP: "dim"
+                TestStatus.SKIP: "dim",
             }.get(r.status, "white")
 
             table.add_row(
                 r.step,
                 f"[{status_style}]{r.status.value}[/{status_style}]",
                 r.message[:50] + "..." if len(r.message) > 50 else r.message,
-                f"{r.duration_ms:.0f}ms" if r.duration_ms > 0 else "-"
+                f"{r.duration_ms:.0f}ms" if r.duration_ms > 0 else "-",
             )
 
         console.print(table)
 
         # Final verdict
         if failed == 0:
-            console.print(Panel(
-                f"[bold green]PIPELINE VALIDATION PASSED[/bold green]\n\n"
-                f"✅ Passed: {passed}\n"
-                f"⚠️ Warnings: {warnings}\n"
-                f"⏭️ Skipped: {skipped}\n\n"
-                f"Data is flowing correctly from collection to dashboard.",
-                style="green"
-            ))
+            console.print(
+                Panel(
+                    f"[bold green]PIPELINE VALIDATION PASSED[/bold green]\n\n"
+                    f"✅ Passed: {passed}\n"
+                    f"⚠️ Warnings: {warnings}\n"
+                    f"⏭️ Skipped: {skipped}\n\n"
+                    f"Data is flowing correctly from collection to dashboard.",
+                    style="green",
+                )
+            )
         else:
-            console.print(Panel(
-                f"[bold red]PIPELINE VALIDATION FAILED[/bold red]\n\n"
-                f"✅ Passed: {passed}\n"
-                f"❌ Failed: {failed}\n"
-                f"⚠️ Warnings: {warnings}\n\n"
-                f"Fix failures to ensure data reaches the dashboard.",
-                style="red"
-            ))
+            console.print(
+                Panel(
+                    f"[bold red]PIPELINE VALIDATION FAILED[/bold red]\n\n"
+                    f"✅ Passed: {passed}\n"
+                    f"❌ Failed: {failed}\n"
+                    f"⚠️ Warnings: {warnings}\n\n"
+                    f"Fix failures to ensure data reaches the dashboard.",
+                    style="red",
+                )
+            )
 
     return failed == 0
 
@@ -948,20 +983,33 @@ async def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Pipeline to Dashboard Validation")
-    parser.add_argument("--live-test", action="store_true", help="Actually broadcast test data to dashboard")
-    parser.add_argument("--full-cycle", action="store_true", help="Run a mini trading cycle with broadcasts")
-    parser.add_argument("--remote", action="store_true", help="Test against Render dashboard (not localhost)")
+    parser.add_argument(
+        "--live-test",
+        action="store_true",
+        help="Actually broadcast test data to dashboard",
+    )
+    parser.add_argument(
+        "--full-cycle",
+        action="store_true",
+        help="Run a mini trading cycle with broadcasts",
+    )
+    parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Test against Render dashboard (not localhost)",
+    )
     args = parser.parse_args()
 
     # Set dashboard URL for remote testing
     if args.remote:
         os.environ["DASHBOARD_URL"] = "https://kalshi-dashboard.onrender.com"
         if console:
-            console.print("[yellow]Using REMOTE dashboard: https://kalshi-dashboard.onrender.com[/yellow]\n")
+            console.print(
+                "[yellow]Using REMOTE dashboard: https://kalshi-dashboard.onrender.com[/yellow]\n"
+            )
 
     success = await run_pipeline_validation(
-        live_test=args.live_test,
-        full_cycle=args.full_cycle
+        live_test=args.live_test, full_cycle=args.full_cycle
     )
 
     sys.exit(0 if success else 1)

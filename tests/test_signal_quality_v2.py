@@ -11,27 +11,22 @@ Tests the 8-phase implementation:
 7. Skip override safety
 8. Single-lever influence
 """
+
 import math
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trendradar_client import (
-    TrendingSignal,
-    SignalConfig,
-    OutletTier,
-    get_outlet_tier,
-    calculate_signal_strength,
-    analyze_headline_sentiment,
-    calculate_signal_influence,
-    TIER1_OUTLETS,
-    TIER2_OUTLETS,
-    TIER_WEIGHTS,
-)
 from betting_models import SkipReason
+from trendradar_client import (TIER1_OUTLETS, TIER2_OUTLETS, TIER_WEIGHTS,
+                               OutletTier, SignalConfig, TrendingSignal,
+                               analyze_headline_sentiment,
+                               calculate_signal_influence,
+                               calculate_signal_strength, get_outlet_tier)
 
 
 # =============================================================================
@@ -67,7 +62,9 @@ class TestDeduplication:
                 title_words = set(title_lower.split())
                 cluster_words = set(cluster["representative"].lower().split())
                 if len(title_words) > 0 and len(cluster_words) > 0:
-                    overlap = len(title_words & cluster_words) / min(len(title_words), len(cluster_words))
+                    overlap = len(title_words & cluster_words) / min(
+                        len(title_words), len(cluster_words)
+                    )
                     if overlap > 0.6:
                         cluster["items"].append(title)
                         found_cluster = True
@@ -78,10 +75,13 @@ class TestDeduplication:
         # Should have fewer clusters than raw headlines
         assert len(story_clusters) < len(headlines), "De-dup should reduce count"
         # Expect roughly 7 clusters (3 Trump -> 1, 2 Fed -> 1, 5 unique)
-        assert len(story_clusters) <= 8, f"Expected ~7-8 clusters, got {len(story_clusters)}"
+        assert (
+            len(story_clusters) <= 8
+        ), f"Expected ~7-8 clusters, got {len(story_clusters)}"
 
     def test_dedup_symmetric_overlap(self):
         """Overlap metric should be symmetric."""
+
         def calc_overlap(a: str, b: str) -> float:
             words_a = set(a.lower().split())
             words_b = set(b.lower().split())
@@ -96,6 +96,7 @@ class TestDeduplication:
 
     def test_dedup_stopwords_dont_cause_false_matches(self):
         """Stories with only stopword overlap should not cluster."""
+
         def calc_overlap(a: str, b: str) -> float:
             words_a = set(a.lower().split())
             words_b = set(b.lower().split())
@@ -210,7 +211,7 @@ class TestBaselineNormalization:
             relevance=0.8,
             baseline_frequency=4.0,
             current_frequency=5.0,
-            frequency_ratio=1.25  # Below 1.5 threshold
+            frequency_ratio=1.25,  # Below 1.5 threshold
         )
 
         result_low = calculate_signal_influence(signal_low, "buy_yes", 0.5, config)
@@ -227,7 +228,7 @@ class TestBaselineNormalization:
             relevance=0.8,
             baseline_frequency=4.0,
             current_frequency=6.0,
-            frequency_ratio=1.5  # At threshold
+            frequency_ratio=1.5,  # At threshold
         )
 
         result_high = calculate_signal_influence(signal_high, "buy_yes", 0.5, config)
@@ -244,17 +245,19 @@ class TestStrengthFormula:
         """Strength should always be in [0, 1] for any input."""
         test_cases = [
             # (unique_story_count, relevance, novelty, sentiment_confidence, neutral_ratio, tier1_count)
-            (0, 0.5, 1.0, 0.5, 0.0, 0),      # Zero stories
-            (1, 0.0, 0.0, 0.0, 1.0, 0),      # All zeros
-            (100, 1.0, 1.0, 1.0, 0.0, 10),   # All max
-            (5, 0.5, 0.5, 0.5, 0.5, 2),      # Medium values
-            (1, 1.0, 1.0, 1.0, 0.0, 0),      # Single story, high confidence
-            (10, 0.1, 1.0, 0.9, 0.8, 5),     # Low relevance, high neutral
+            (0, 0.5, 1.0, 0.5, 0.0, 0),  # Zero stories
+            (1, 0.0, 0.0, 0.0, 1.0, 0),  # All zeros
+            (100, 1.0, 1.0, 1.0, 0.0, 10),  # All max
+            (5, 0.5, 0.5, 0.5, 0.5, 2),  # Medium values
+            (1, 1.0, 1.0, 1.0, 0.0, 0),  # Single story, high confidence
+            (10, 0.1, 1.0, 0.9, 0.8, 5),  # Low relevance, high neutral
         ]
 
         for params in test_cases:
             strength = calculate_signal_strength(*params)
-            assert 0.0 <= strength <= 1.0, f"Strength {strength} out of bounds for {params}"
+            assert (
+                0.0 <= strength <= 1.0
+            ), f"Strength {strength} out of bounds for {params}"
             assert not math.isnan(strength), f"Strength is NaN for {params}"
             assert not math.isinf(strength), f"Strength is infinite for {params}"
 
@@ -268,13 +271,17 @@ class TestStrengthFormula:
         # 2 stories with perfect confidence should still be dampened
         strength_small = calculate_signal_strength(2, 0.8, 1.0, 1.0, 0.0, 0)
         strength_large = calculate_signal_strength(10, 0.8, 1.0, 1.0, 0.0, 0)
-        assert strength_small < strength_large, "Small samples should have lower strength"
+        assert (
+            strength_small < strength_large
+        ), "Small samples should have lower strength"
 
     def test_neutral_penalty_reduces_strength(self):
         """High neutral ratio should reduce strength."""
         strength_low_neutral = calculate_signal_strength(5, 0.8, 1.0, 0.8, 0.2, 0)
         strength_high_neutral = calculate_signal_strength(5, 0.8, 1.0, 0.8, 0.8, 0)
-        assert strength_high_neutral < strength_low_neutral, "High neutral should reduce strength"
+        assert (
+            strength_high_neutral < strength_low_neutral
+        ), "High neutral should reduce strength"
 
     def test_tier1_bonus_increases_strength(self):
         """Tier-1 sources should increase strength."""
@@ -307,11 +314,13 @@ class TestSkipOverrideSafety:
             source_count=10,
             unique_story_count=10,  # Above 5 threshold
             relevance=0.8,
-            frequency_ratio=2.0  # Above baseline
+            frequency_ratio=2.0,  # Above baseline
         )
 
         result = calculate_signal_influence(signal, "buy_yes", 0.5, config)
-        assert result["should_override_skip"] is True, "Strong signal should allow override"
+        assert (
+            result["should_override_skip"] is True
+        ), "Strong signal should allow override"
 
     def test_weak_signal_cannot_trigger_override(self):
         """Weak signal should not allow skip override."""
@@ -323,11 +332,13 @@ class TestSkipOverrideSafety:
             source_count=3,
             unique_story_count=3,
             relevance=0.8,
-            frequency_ratio=2.0
+            frequency_ratio=2.0,
         )
 
         result = calculate_signal_influence(signal, "buy_yes", 0.5, config)
-        assert result["should_override_skip"] is False, "Weak signal should not allow override"
+        assert (
+            result["should_override_skip"] is False
+        ), "Weak signal should not allow override"
 
     def test_override_requires_sufficient_sources(self):
         """Override requires min_unique_stories >= 5."""
@@ -339,7 +350,7 @@ class TestSkipOverrideSafety:
             source_count=3,
             unique_story_count=3,  # Below 5 threshold
             relevance=0.8,
-            frequency_ratio=2.0
+            frequency_ratio=2.0,
         )
 
         result = calculate_signal_influence(signal, "buy_yes", 0.5, config)
@@ -364,13 +375,17 @@ class TestSingleLeverInfluence:
             source_count=10,
             unique_story_count=10,
             relevance=0.8,
-            frequency_ratio=2.0
+            frequency_ratio=2.0,
         )
-        result_aligned = calculate_signal_influence(signal_aligned, "buy_yes", 0.5, config)
+        result_aligned = calculate_signal_influence(
+            signal_aligned, "buy_yes", 0.5, config
+        )
         assert result_aligned["kelly_multiplier"] == 1.0, "Kelly should always be 1.0"
 
         # Test conflicting signal
-        result_conflict = calculate_signal_influence(signal_aligned, "buy_no", 0.5, config)
+        result_conflict = calculate_signal_influence(
+            signal_aligned, "buy_no", 0.5, config
+        )
         assert result_conflict["kelly_multiplier"] == 1.0, "Kelly should always be 1.0"
 
     def test_probability_adjustment_bounded(self):
@@ -383,11 +398,14 @@ class TestSingleLeverInfluence:
             source_count=20,
             unique_story_count=20,
             relevance=1.0,  # Max relevance
-            frequency_ratio=3.0
+            frequency_ratio=3.0,
         )
 
         result = calculate_signal_influence(signal, "buy_yes", 0.5, config)
-        assert abs(result["probability_adjustment"]) <= config.max_probability_adjustment + 0.001
+        assert (
+            abs(result["probability_adjustment"])
+            <= config.max_probability_adjustment + 0.001
+        )
 
     def test_conflicting_signal_reduces_probability(self):
         """Conflicting signal should reduce (or not increase) probability."""
@@ -399,7 +417,7 @@ class TestSingleLeverInfluence:
             source_count=10,
             unique_story_count=10,
             relevance=0.8,
-            frequency_ratio=2.0
+            frequency_ratio=2.0,
         )
 
         # buy_no conflicts with positive sentiment
@@ -408,7 +426,9 @@ class TestSingleLeverInfluence:
         # For buy_no with positive signal, adjustment should be positive (reducing bet on NO)
         # Actually let's check the logic...
         # buy_no + positive = conflicting, penalty is applied
-        assert result["probability_adjustment"] > 0, "Conflicting should have positive adj for buy_no"
+        assert (
+            result["probability_adjustment"] > 0
+        ), "Conflicting should have positive adj for buy_no"
 
 
 # =============================================================================

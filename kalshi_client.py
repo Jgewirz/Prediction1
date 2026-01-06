@@ -3,24 +3,32 @@ Simple Kalshi API Client with RSA authentication
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import time
-import base64
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 import httpx
-from loguru import logger
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from config import EarlyEntryConfig, KalshiConfig
 from cryptography.hazmat.backends import default_backend
-from config import KalshiConfig, EarlyEntryConfig
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from loguru import logger
 
 
 class KalshiClient:
     """Simple Kalshi API client for basic trading operations."""
 
-    def __init__(self, config: KalshiConfig, minimum_time_remaining_hours: float = 1.0, max_markets_per_event: int = 10, max_close_ts: Optional[int] = None, early_entry_config: Optional[EarlyEntryConfig] = None):
+    def __init__(
+        self,
+        config: KalshiConfig,
+        minimum_time_remaining_hours: float = 1.0,
+        max_markets_per_event: int = 10,
+        max_close_ts: Optional[int] = None,
+        early_entry_config: Optional[EarlyEntryConfig] = None,
+    ):
         self.config = config
         self.base_url = config.base_url
         self.api_key = config.api_key
@@ -32,7 +40,9 @@ class KalshiClient:
         self.client = None
         self.session_token = None
 
-    def calculate_early_entry_score(self, market: Dict[str, Any], event: Dict[str, Any]) -> float:
+    def calculate_early_entry_score(
+        self, market: Dict[str, Any], event: Dict[str, Any]
+    ) -> float:
         """
         Calculate early entry opportunity score for a market.
         Higher score = better early entry opportunity.
@@ -66,7 +76,9 @@ class KalshiClient:
 
                 # Score: 1.0 if brand new, 0.0 if at max_market_age_hours
                 if market_age_hours <= config.max_market_age_hours:
-                    recency_score = max(0, 1 - (market_age_hours / config.max_market_age_hours))
+                    recency_score = max(
+                        0, 1 - (market_age_hours / config.max_market_age_hours)
+                    )
                 else:
                     recency_score = 0.0  # Too old, no score
                 score += recency_score * config.recency_weight
@@ -138,34 +150,33 @@ class KalshiClient:
 
         # Has a different series ticker and a strike period = recurring series
         return False
-        
+
     async def login(self):
         """Login to Kalshi API."""
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=30.0
-        )
-        
+        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+
         # For now, we'll assume the client handles authentication
         # In the real implementation, you'd do login here
         logger.info(f"Connected to Kalshi API at {self.base_url}")
-        
+
     async def get_events(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get top events sorted by 24-hour volume."""
         try:
             # First, fetch ALL events from the platform using pagination
             all_events = await self._fetch_all_events()
-            
-            # Calculate total volume_24h for each event from its markets 
+
+            # Calculate total volume_24h for each event from its markets
             # (API already filters for "open" status events)
             enriched_events = []
             now = datetime.now(timezone.utc)
-            minimum_time_remaining = self.minimum_time_remaining_hours * 3600  # Convert hours to seconds
+            minimum_time_remaining = (
+                self.minimum_time_remaining_hours * 3600
+            )  # Convert hours to seconds
             filter_enabled = self.max_close_ts is not None
             markets_seen = 0
             markets_kept = 0
             events_dropped_by_expiration = 0
-            
+
             for event in all_events:
                 # Get markets and select top N by volume
                 all_markets = event.get("markets", [])
@@ -180,8 +191,10 @@ class KalshiClient:
                             continue
                         try:
                             # Parse ISO8601 close_time
-                            if close_time_str.endswith('Z'):
-                                close_dt = datetime.fromisoformat(close_time_str.replace('Z', '+00:00'))
+                            if close_time_str.endswith("Z"):
+                                close_dt = datetime.fromisoformat(
+                                    close_time_str.replace("Z", "+00:00")
+                                )
                             else:
                                 close_dt = datetime.fromisoformat(close_time_str)
                             if close_dt.tzinfo is None:
@@ -193,7 +206,7 @@ class KalshiClient:
                             # If parsing fails, skip this market from filtered list
                             continue
                     all_markets = filtered_markets
-                
+
                 # If no markets remain after filtering, skip this event
                 if not all_markets:
                     if filter_enabled:
@@ -204,75 +217,94 @@ class KalshiClient:
                     markets_kept += len(all_markets)
 
                 # Sort markets by volume (descending) and take top N
-                sorted_markets = sorted(all_markets, key=lambda m: m.get("volume", 0), reverse=True)
-                top_markets = sorted_markets[:self.max_markets_per_event]
-                
+                sorted_markets = sorted(
+                    all_markets, key=lambda m: m.get("volume", 0), reverse=True
+                )
+                top_markets = sorted_markets[: self.max_markets_per_event]
+
                 if len(all_markets) > self.max_markets_per_event:
-                    logger.info(f"Event {event.get('event_ticker', '')} has {len(all_markets)} markets, selecting top {len(top_markets)} by volume")
-                
+                    logger.info(
+                        f"Event {event.get('event_ticker', '')} has {len(all_markets)} markets, selecting top {len(top_markets)} by volume"
+                    )
+
                 # Calculate volume metrics for this event using top markets
                 total_liquidity = 0
                 total_volume = 0
                 total_volume_24h = 0
                 total_open_interest = 0
-                
+
                 for market in top_markets:
                     total_liquidity += market.get("liquidity", 0)
                     total_volume += market.get("volume", 0)
                     total_volume_24h += market.get("volume_24h", 0)
                     total_open_interest += market.get("open_interest", 0)
-                
+
                 # Calculate time remaining if strike_date exists
                 time_remaining_hours = None
                 strike_date_str = event.get("strike_date", "")
-                
+
                 if strike_date_str:
                     try:
                         # Parse strike date
-                        if strike_date_str.endswith('Z'):
-                            strike_date = datetime.fromisoformat(strike_date_str.replace('Z', '+00:00'))
+                        if strike_date_str.endswith("Z"):
+                            strike_date = datetime.fromisoformat(
+                                strike_date_str.replace("Z", "+00:00")
+                            )
                         else:
                             strike_date = datetime.fromisoformat(strike_date_str)
-                        
+
                         # Ensure timezone awareness
                         if strike_date.tzinfo is None:
                             strike_date = strike_date.replace(tzinfo=timezone.utc)
-                        
+
                         # Calculate time remaining
                         time_remaining = (strike_date - now).total_seconds()
                         time_remaining_hours = time_remaining / 3600
-                        
+
                         # Optional: Skip events that are very close to striking
-                        if time_remaining > 0 and time_remaining < minimum_time_remaining:
-                            logger.info(f"Event {event.get('event_ticker', '')} strikes in {time_remaining/60:.1f} minutes, skipping")
+                        if (
+                            time_remaining > 0
+                            and time_remaining < minimum_time_remaining
+                        ):
+                            logger.info(
+                                f"Event {event.get('event_ticker', '')} strikes in {time_remaining/60:.1f} minutes, skipping"
+                            )
                             continue
-                        
+
                     except (ValueError, TypeError) as e:
-                        logger.warning(f"Could not parse strike_date '{strike_date_str}' for event {event.get('event_ticker', '')}: {e}")
+                        logger.warning(
+                            f"Could not parse strike_date '{strike_date_str}' for event {event.get('event_ticker', '')}: {e}"
+                        )
                         # Continue without time filtering for this event
-                
+
                 # If no top markets selected, skip event
                 if not top_markets:
                     continue
 
-                enriched_events.append({
-                    "event_ticker": event.get("event_ticker", ""),
-                    "series_ticker": event.get("series_ticker", ""),  # For unique event detection
-                    "title": event.get("title", ""),
-                    "subtitle": event.get("sub_title", ""),
-                    "volume": total_volume,
-                    "volume_24h": total_volume_24h,
-                    "liquidity": total_liquidity,
-                    "open_interest": total_open_interest,
-                    "category": event.get("category", ""),
-                    "mutually_exclusive": event.get("mutually_exclusive", False),
-                    "strike_date": strike_date_str,
-                    "strike_period": event.get("strike_period", ""),
-                    "time_remaining_hours": time_remaining_hours,
-                    "markets": top_markets,  # Store the top markets with the event
-                    "total_markets": len(all_markets),  # Store original market count
-                })
-            
+                enriched_events.append(
+                    {
+                        "event_ticker": event.get("event_ticker", ""),
+                        "series_ticker": event.get(
+                            "series_ticker", ""
+                        ),  # For unique event detection
+                        "title": event.get("title", ""),
+                        "subtitle": event.get("sub_title", ""),
+                        "volume": total_volume,
+                        "volume_24h": total_volume_24h,
+                        "liquidity": total_liquidity,
+                        "open_interest": total_open_interest,
+                        "category": event.get("category", ""),
+                        "mutually_exclusive": event.get("mutually_exclusive", False),
+                        "strike_date": strike_date_str,
+                        "strike_period": event.get("strike_period", ""),
+                        "time_remaining_hours": time_remaining_hours,
+                        "markets": top_markets,  # Store the top markets with the event
+                        "total_markets": len(
+                            all_markets
+                        ),  # Store original market count
+                    }
+                )
+
             # Sorting strategy: Early Entry (hybrid) or Legacy (volume-based)
             if self.early_entry_config and self.early_entry_config.enabled:
                 # EARLY ENTRY MODE: Score events by recency + low volume + time remaining + unique/new bonuses
@@ -289,16 +321,22 @@ class KalshiClient:
                     # Score each market in the event
                     market_scores = []
                     for market in event.get("markets", []):
-                        market["early_entry_score"] = self.calculate_early_entry_score(market, event)
+                        market["early_entry_score"] = self.calculate_early_entry_score(
+                            market, event
+                        )
                         market_scores.append(market["early_entry_score"])
                         if market.get("is_new_market"):
                             new_market_count += 1
 
                     # Event score = average of market scores (or 0 if no markets)
-                    event["early_entry_score"] = sum(market_scores) / len(market_scores) if market_scores else 0
+                    event["early_entry_score"] = (
+                        sum(market_scores) / len(market_scores) if market_scores else 0
+                    )
 
                 # Sort by early entry score (highest = best early opportunity)
-                enriched_events.sort(key=lambda x: x.get("early_entry_score", 0), reverse=True)
+                enriched_events.sort(
+                    key=lambda x: x.get("early_entry_score", 0), reverse=True
+                )
                 logger.info(
                     f"Early entry mode (live=new, liveEventType=unique): "
                     f"sorted {len(enriched_events)} events | "
@@ -307,11 +345,13 @@ class KalshiClient:
             else:
                 # LEGACY MODE: Sort by volume_24h (descending) for popularity ranking
                 enriched_events.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
-                logger.info(f"Legacy mode: sorted {len(enriched_events)} events by 24h volume")
+                logger.info(
+                    f"Legacy mode: sorted {len(enriched_events)} events by 24h volume"
+                )
 
             # Return only the top N events as requested
             top_events = enriched_events[:limit]
-            
+
             # Summary log for expiration filter effects
             if filter_enabled and markets_seen > 0:
                 dropped = markets_seen - markets_kept
@@ -319,14 +359,16 @@ class KalshiClient:
                     f"Expiration filter summary: kept {markets_kept}/{markets_seen} markets; "
                     f"dropped {dropped}. Events dropped due to no remaining markets: {events_dropped_by_expiration}"
                 )
-            
-            logger.info(f"Retrieved {len(all_events)} total events, filtered to {len(enriched_events)} active events, returning top {len(top_events)} by 24h volume")
+
+            logger.info(
+                f"Retrieved {len(all_events)} total events, filtered to {len(enriched_events)} active events, returning top {len(top_events)} by 24h volume"
+            )
             return top_events
-            
+
         except Exception as e:
             logger.error(f"Error getting events: {e}")
             return []
-    
+
     async def _fetch_all_events(self) -> List[Dict[str, Any]]:
         """
         Fetch all events from the platform using pagination.
@@ -362,17 +404,17 @@ class KalshiClient:
                     "limit": 100,  # Maximum events per page
                     "status": "open",  # Only get open events (active/tradeable)
                     "with_nested_markets": "true",  # Include market data for scoring
-                    "min_close_ts": min_close_ts  # Focus on active markets (not expired)
+                    "min_close_ts": min_close_ts,  # Focus on active markets (not expired)
                 }
 
                 if cursor:
                     params["cursor"] = cursor
 
-                logger.info(f"Fetching events page {page}... (min_close_ts={min_close_ts})")
+                logger.info(
+                    f"Fetching events page {page}... (min_close_ts={min_close_ts})"
+                )
                 response = await self.client.get(
-                    "/trade-api/v2/events",
-                    headers=headers,
-                    params=params
+                    "/trade-api/v2/events", headers=headers, params=params
                 )
                 response.raise_for_status()
 
@@ -387,7 +429,9 @@ class KalshiClient:
                     break
 
                 all_events.extend(events)
-                logger.info(f"Page {page}: {len(events)} events (total: {len(all_events)})")
+                logger.info(
+                    f"Page {page}: {len(events)} events (total: {len(all_events)})"
+                )
 
                 # Check if there's a next page
                 cursor = data.get("cursor")
@@ -402,13 +446,15 @@ class KalshiClient:
 
         logger.info(f"Fetched {len(all_events)} total events from {page} pages")
         return all_events
-    
+
     async def get_markets_for_event(self, event_ticker: str) -> List[Dict[str, Any]]:
         """Get markets for a specific event (returns pre-filtered top markets from get_events)."""
         # This method is kept for compatibility but now returns pre-filtered markets
         # The actual filtering happens in get_events() to avoid duplicate API calls
-        logger.warning(f"get_markets_for_event called for {event_ticker} - markets should be pre-loaded from get_events()")
-        
+        logger.warning(
+            f"get_markets_for_event called for {event_ticker} - markets should be pre-loaded from get_events()"
+        )
+
         # Fallback: fetch markets directly if needed
         try:
             headers = await self._get_headers("GET", "/trade-api/v2/markets")
@@ -417,12 +463,10 @@ class KalshiClient:
             if self.max_close_ts is not None:
                 params["max_close_ts"] = self.max_close_ts
             response = await self.client.get(
-                "/trade-api/v2/markets",
-                headers=headers,
-                params=params
+                "/trade-api/v2/markets", headers=headers, params=params
             )
             response.raise_for_status()
-            
+
             data = response.json()
             all_markets = data.get("markets", [])
 
@@ -434,8 +478,10 @@ class KalshiClient:
                     if not close_time_str:
                         continue
                     try:
-                        if close_time_str.endswith('Z'):
-                            close_dt = datetime.fromisoformat(close_time_str.replace('Z', '+00:00'))
+                        if close_time_str.endswith("Z"):
+                            close_dt = datetime.fromisoformat(
+                                close_time_str.replace("Z", "+00:00")
+                            )
                         else:
                             close_dt = datetime.fromisoformat(close_time_str)
                         if close_dt.tzinfo is None:
@@ -446,50 +492,55 @@ class KalshiClient:
                     except Exception:
                         continue
                 all_markets = filtered_markets
-            
+
             # Sort by volume and take top markets
-            sorted_markets = sorted(all_markets, key=lambda m: m.get("volume", 0), reverse=True)
-            top_markets = sorted_markets[:self.max_markets_per_event]
-            
+            sorted_markets = sorted(
+                all_markets, key=lambda m: m.get("volume", 0), reverse=True
+            )
+            top_markets = sorted_markets[: self.max_markets_per_event]
+
             # Return markets without odds for research
             simple_markets = []
             for market in top_markets:
-                simple_markets.append({
-                    "ticker": market.get("ticker", ""),
-                    "title": market.get("title", ""),
-                    "subtitle": market.get("subtitle", ""),
-                    "volume": market.get("volume", 0),
-                    "open_time": market.get("open_time", ""),
-                    "close_time": market.get("close_time", ""),
-                    # Note: NOT including yes_bid, no_bid, yes_ask, no_ask for research
-                })
-            
-            logger.info(f"Retrieved {len(simple_markets)} markets for event {event_ticker} (top {len(top_markets)} by volume)")
+                simple_markets.append(
+                    {
+                        "ticker": market.get("ticker", ""),
+                        "title": market.get("title", ""),
+                        "subtitle": market.get("subtitle", ""),
+                        "volume": market.get("volume", 0),
+                        "open_time": market.get("open_time", ""),
+                        "close_time": market.get("close_time", ""),
+                        # Note: NOT including yes_bid, no_bid, yes_ask, no_ask for research
+                    }
+                )
+
+            logger.info(
+                f"Retrieved {len(simple_markets)} markets for event {event_ticker} (top {len(top_markets)} by volume)"
+            )
             return simple_markets
-            
+
         except Exception as e:
             logger.error(f"Error getting markets for event {event_ticker}: {e}")
             return []
-    
+
     async def get_market_with_odds(self, ticker: str) -> Dict[str, Any]:
         """Get a specific market with current odds for trading."""
         try:
             headers = await self._get_headers("GET", f"/trade-api/v2/markets/{ticker}")
             response = await self.client.get(
-                f"/trade-api/v2/markets/{ticker}",
-                headers=headers
+                f"/trade-api/v2/markets/{ticker}", headers=headers
             )
             response.raise_for_status()
-            
+
             data = response.json()
             market = data.get("market", {})
-            
+
             # Get specific fields
             yes_bid = market.get("yes_bid", 0)
             no_bid = market.get("no_bid", 0)
             yes_ask = market.get("yes_ask", 0)
             no_ask = market.get("no_ask", 0)
-            
+
             # Note: Event-level filtering is already done in get_events()
             return {
                 "ticker": market.get("ticker", ""),
@@ -502,73 +553,87 @@ class KalshiClient:
                 "status": market.get("status", ""),
                 "close_time": market.get("close_time", ""),
             }
-            
+
         except Exception as e:
             logger.error(f"Error getting market {ticker}: {e}")
             return {}
-    
+
     async def get_user_positions(self) -> List[Dict[str, Any]]:
         """Get all user positions."""
         try:
-            headers = await self._get_headers("GET", "/trade-api/v2/portfolio/positions")
+            headers = await self._get_headers(
+                "GET", "/trade-api/v2/portfolio/positions"
+            )
             response = await self.client.get(
-                "/trade-api/v2/portfolio/positions",
-                headers=headers
+                "/trade-api/v2/portfolio/positions", headers=headers
             )
             response.raise_for_status()
-            
+
             data = response.json()
-            
+
             # Debug: Log the raw API response structure
-            logger.debug(f"Position API response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-            
+            logger.debug(
+                f"Position API response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}"
+            )
+
             # The API returns market_positions, not positions
             positions = data.get("market_positions", [])
-            
+
             # Also check for event_positions (though we primarily need market_positions)
             event_positions = data.get("event_positions", [])
-            
-            logger.info(f"Retrieved {len(positions)} market positions and {len(event_positions)} event positions")
-            logger.debug(f"Market positions: {positions[:3] if positions else 'None'}")  # Log first 3 for debugging
-            
+
+            logger.info(
+                f"Retrieved {len(positions)} market positions and {len(event_positions)} event positions"
+            )
+            logger.debug(
+                f"Market positions: {positions[:3] if positions else 'None'}"
+            )  # Log first 3 for debugging
+
             return positions
-            
+
         except Exception as e:
             logger.error(f"Error getting user positions: {e}")
             return []
-    
+
     async def has_position_in_market(self, ticker: str) -> bool:
         """Check if user already has a position in the specified market."""
         try:
             positions = await self.get_user_positions()
-            
+
             for position in positions:
                 if position.get("ticker") == ticker:
                     # Check if position has any contracts
                     # In Kalshi API: positive = YES contracts, negative = NO contracts, 0 = no position
                     position_size = position.get("position", 0)
-                    
+
                     if position_size != 0:
                         position_type = "YES" if position_size > 0 else "NO"
-                        logger.info(f"Found existing position in {ticker}: {abs(position_size)} {position_type} contracts")
+                        logger.info(
+                            f"Found existing position in {ticker}: {abs(position_size)} {position_type} contracts"
+                        )
                         return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Error checking position for {ticker}: {e}")
             return False  # If we can't check, assume no position to be safe
 
-    async def place_order(self, ticker: str, side: str, amount: float) -> Dict[str, Any]:
+    async def place_order(
+        self, ticker: str, side: str, amount: float
+    ) -> Dict[str, Any]:
         """Place a limit order at current market price."""
         try:
             # Generate a unique client order ID
             import uuid
+
             client_order_id = str(uuid.uuid4())
 
             # First, get the current market price
             headers = await self._get_headers("GET", f"/trade-api/v2/markets/{ticker}")
-            market_response = await self.client.get(f"/trade-api/v2/markets/{ticker}", headers=headers)
+            market_response = await self.client.get(
+                f"/trade-api/v2/markets/{ticker}", headers=headers
+            )
             market_response.raise_for_status()
             market_data = market_response.json().get("market", {})
 
@@ -589,7 +654,9 @@ class KalshiClient:
             num_contracts = amount_cents // price_cents
 
             if num_contracts < 1:
-                logger.error(f"Amount ${amount} too small for price {price_cents} cents")
+                logger.error(
+                    f"Amount ${amount} too small for price {price_cents} cents"
+                )
                 return {"success": False, "error": "Amount too small for current price"}
 
             # Kalshi API requires one of: yes_price, no_price (in cents 1-99)
@@ -608,19 +675,27 @@ class KalshiClient:
             else:
                 order_data["no_price"] = price_cents
 
-            logger.info(f"Placing order: {ticker} {side} {num_contracts} contracts @ {price_cents}c (${amount:.2f} budget)")
+            logger.info(
+                f"Placing order: {ticker} {side} {num_contracts} contracts @ {price_cents}c (${amount:.2f} budget)"
+            )
 
             headers = await self._get_headers("POST", "/trade-api/v2/portfolio/orders")
             response = await self.client.post(
-                "/trade-api/v2/portfolio/orders",
-                headers=headers,
-                json=order_data
+                "/trade-api/v2/portfolio/orders", headers=headers, json=order_data
             )
             response.raise_for_status()
 
             result = response.json()
-            logger.info(f"Order placed successfully: {ticker} {side} {num_contracts} @ {price_cents}c")
-            return {"success": True, "order_id": result.get("order", {}).get("order_id", ""), "client_order_id": client_order_id, "contracts": num_contracts, "price": price_cents}
+            logger.info(
+                f"Order placed successfully: {ticker} {side} {num_contracts} @ {price_cents}c"
+            )
+            return {
+                "success": True,
+                "order_id": result.get("order", {}).get("order_id", ""),
+                "client_order_id": client_order_id,
+                "contracts": num_contracts,
+                "price": price_cents,
+            }
 
         except Exception as e:
             logger.error(f"Error placing order: {e}")
@@ -632,7 +707,7 @@ class KalshiClient:
         side: str,
         contracts: int,
         price_cents: Optional[int] = None,
-        order_type: str = "limit"
+        order_type: str = "limit",
     ) -> Dict[str, Any]:
         """
         Sell (close) a position.
@@ -649,6 +724,7 @@ class KalshiClient:
         """
         try:
             import uuid
+
             client_order_id = str(uuid.uuid4())
 
             # Get current market price if not specified
@@ -680,20 +756,22 @@ class KalshiClient:
                 else:
                     order_data["no_price"] = price_cents
 
-            logger.info(f"Selling position: {ticker} {side} {contracts} contracts @ {price_cents}c")
+            logger.info(
+                f"Selling position: {ticker} {side} {contracts} contracts @ {price_cents}c"
+            )
 
             headers = await self._get_headers("POST", "/trade-api/v2/portfolio/orders")
             response = await self.client.post(
-                "/trade-api/v2/portfolio/orders",
-                headers=headers,
-                json=order_data
+                "/trade-api/v2/portfolio/orders", headers=headers, json=order_data
             )
             response.raise_for_status()
 
             result = response.json()
             order = result.get("order", {})
 
-            logger.info(f"Sell order placed: {order.get('order_id')} - {contracts} {side} @ {price_cents}c")
+            logger.info(
+                f"Sell order placed: {order.get('order_id')} - {contracts} {side} @ {price_cents}c"
+            )
 
             return {
                 "success": True,
@@ -736,7 +814,11 @@ class KalshiClient:
             position_size = position.get("position", 0)
 
             if position_size == 0:
-                return {"success": True, "message": "No position to liquidate", "contracts": 0}
+                return {
+                    "success": True,
+                    "message": "No position to liquidate",
+                    "contracts": 0,
+                }
 
             # Determine side based on position sign
             # Positive = YES contracts, Negative = NO contracts
@@ -777,14 +859,16 @@ class KalshiClient:
             "success": True,
             "liquidated": [],
             "failed": [],
-            "total_positions": 0
+            "total_positions": 0,
         }
 
         try:
             positions = await self.get_user_positions()
             results["total_positions"] = len(positions)
 
-            logger.warning(f"EMERGENCY LIQUIDATION: Processing {len(positions)} positions")
+            logger.warning(
+                f"EMERGENCY LIQUIDATION: Processing {len(positions)} positions"
+            )
 
             for position in positions:
                 ticker = position.get("ticker")
@@ -796,17 +880,18 @@ class KalshiClient:
                 result = await self.liquidate_position(ticker)
 
                 if result.get("success"):
-                    results["liquidated"].append({
-                        "ticker": ticker,
-                        "contracts": abs(position_size),
-                        "side": "yes" if position_size > 0 else "no",
-                        "order_id": result.get("order_id")
-                    })
+                    results["liquidated"].append(
+                        {
+                            "ticker": ticker,
+                            "contracts": abs(position_size),
+                            "side": "yes" if position_size > 0 else "no",
+                            "order_id": result.get("order_id"),
+                        }
+                    )
                 else:
-                    results["failed"].append({
-                        "ticker": ticker,
-                        "error": result.get("error")
-                    })
+                    results["failed"].append(
+                        {"ticker": ticker, "error": result.get("error")}
+                    )
                     results["success"] = False
 
             logger.info(
@@ -831,10 +916,11 @@ class KalshiClient:
             Order details including status, fill info, etc.
         """
         try:
-            headers = await self._get_headers("GET", f"/trade-api/v2/portfolio/orders/{order_id}")
+            headers = await self._get_headers(
+                "GET", f"/trade-api/v2/portfolio/orders/{order_id}"
+            )
             response = await self.client.get(
-                f"/trade-api/v2/portfolio/orders/{order_id}",
-                headers=headers
+                f"/trade-api/v2/portfolio/orders/{order_id}", headers=headers
             )
             response.raise_for_status()
             return response.json().get("order", {})
@@ -853,10 +939,11 @@ class KalshiClient:
             {"success": bool, "order_id": str, ...}
         """
         try:
-            headers = await self._get_headers("DELETE", f"/trade-api/v2/portfolio/orders/{order_id}")
+            headers = await self._get_headers(
+                "DELETE", f"/trade-api/v2/portfolio/orders/{order_id}"
+            )
             response = await self.client.delete(
-                f"/trade-api/v2/portfolio/orders/{order_id}",
-                headers=headers
+                f"/trade-api/v2/portfolio/orders/{order_id}", headers=headers
             )
             response.raise_for_status()
             logger.info(f"Order {order_id} cancelled successfully")
@@ -879,9 +966,7 @@ class KalshiClient:
             path = "/trade-api/v2/portfolio/fills"
             headers = await self._get_headers("GET", path)
             response = await self.client.get(
-                path,
-                headers=headers,
-                params={"limit": limit}
+                path, headers=headers, params={"limit": limit}
             )
             response.raise_for_status()
             data = response.json()
@@ -893,47 +978,45 @@ class KalshiClient:
     async def _get_headers(self, method: str, path: str) -> Dict[str, str]:
         """Generate headers with RSA signature."""
         timestamp = str(int(time.time() * 1000))
-        
+
         # Create message to sign
         message = f"{timestamp}{method}{path}"
-        
+
         # Sign the message
         signature = self._sign_message(message)
-        
+
         return {
             "KALSHI-ACCESS-KEY": self.api_key,
             "KALSHI-ACCESS-TIMESTAMP": timestamp,
             "KALSHI-ACCESS-SIGNATURE": signature,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-    
+
     def _sign_message(self, message: str) -> str:
         """Sign a message using RSA private key."""
         try:
             # Load private key
             private_key = serialization.load_pem_private_key(
-                self.private_key.encode(),
-                password=None,
-                backend=default_backend()
+                self.private_key.encode(), password=None, backend=default_backend()
             )
-            
+
             # Sign the message
             signature = private_key.sign(
                 message.encode(),
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.MAX_LENGTH
+                    salt_length=padding.PSS.MAX_LENGTH,
                 ),
-                hashes.SHA256()
+                hashes.SHA256(),
             )
-            
+
             # Return base64 encoded signature
             return base64.b64encode(signature).decode()
-            
+
         except Exception as e:
             logger.error(f"Error signing message: {e}")
             raise
-    
+
     async def get_market_status(self, ticker: str) -> Dict[str, Any]:
         """
         Get current market status including settlement info.
@@ -944,8 +1027,7 @@ class KalshiClient:
         try:
             headers = await self._get_headers("GET", f"/trade-api/v2/markets/{ticker}")
             response = await self.client.get(
-                f"/trade-api/v2/markets/{ticker}",
-                headers=headers
+                f"/trade-api/v2/markets/{ticker}", headers=headers
             )
             response.raise_for_status()
 
@@ -984,7 +1066,7 @@ class KalshiClient:
         batch_size = 20
 
         for i in range(0, len(tickers), batch_size):
-            batch = tickers[i:i + batch_size]
+            batch = tickers[i : i + batch_size]
             tasks = [self.get_market_status(ticker) for ticker in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -996,10 +1078,14 @@ class KalshiClient:
             if i + batch_size < len(tickers):
                 await asyncio.sleep(0.2)
 
-        logger.info(f"Found {len(settled_markets)} settled markets out of {len(tickers)} checked")
+        logger.info(
+            f"Found {len(settled_markets)} settled markets out of {len(tickers)} checked"
+        )
         return settled_markets
 
-    async def get_user_fills(self, since: Optional[datetime] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_user_fills(
+        self, since: Optional[datetime] = None, limit: int = 100
+    ) -> List[Dict[str, Any]]:
         """
         Get order fills/settlements for P&L calculation.
 
@@ -1019,9 +1105,7 @@ class KalshiClient:
                 params["min_ts"] = int(since.timestamp())
 
             response = await self.client.get(
-                "/trade-api/v2/portfolio/fills",
-                headers=headers,
-                params=params
+                "/trade-api/v2/portfolio/fills", headers=headers, params=params
             )
             response.raise_for_status()
 
@@ -1043,13 +1127,13 @@ class KalshiClient:
             List of settled position records
         """
         try:
-            headers = await self._get_headers("GET", "/trade-api/v2/portfolio/settlements")
+            headers = await self._get_headers(
+                "GET", "/trade-api/v2/portfolio/settlements"
+            )
             params = {"limit": limit}
 
             response = await self.client.get(
-                "/trade-api/v2/portfolio/settlements",
-                headers=headers,
-                params=params
+                "/trade-api/v2/portfolio/settlements", headers=headers, params=params
             )
             response.raise_for_status()
 
@@ -1076,13 +1160,14 @@ class KalshiClient:
         try:
             headers = await self._get_headers("GET", "/trade-api/v2/portfolio/balance")
             response = await self.client.get(
-                "/trade-api/v2/portfolio/balance",
-                headers=headers
+                "/trade-api/v2/portfolio/balance", headers=headers
             )
             response.raise_for_status()
 
             data = response.json()
-            logger.info(f"Retrieved balance: ${data.get('balance', 0)/100:.2f}, portfolio: ${data.get('portfolio_value', 0)/100:.2f}")
+            logger.info(
+                f"Retrieved balance: ${data.get('balance', 0)/100:.2f}, portfolio: ${data.get('portfolio_value', 0)/100:.2f}"
+            )
             return {
                 "balance": data.get("balance", 0),  # In cents
                 "portfolio_value": data.get("portfolio_value", 0),  # In cents
@@ -1090,7 +1175,10 @@ class KalshiClient:
                 # Convert to dollars for convenience
                 "balance_dollars": data.get("balance", 0) / 100,
                 "portfolio_value_dollars": data.get("portfolio_value", 0) / 100,
-                "total_equity_dollars": (data.get("balance", 0) + data.get("portfolio_value", 0)) / 100
+                "total_equity_dollars": (
+                    data.get("balance", 0) + data.get("portfolio_value", 0)
+                )
+                / 100,
             }
         except Exception as e:
             logger.error(f"Error getting balance: {e}")
@@ -1101,7 +1189,7 @@ class KalshiClient:
                 "balance_dollars": 0,
                 "portfolio_value_dollars": 0,
                 "total_equity_dollars": 0,
-                "error": str(e)
+                "error": str(e),
             }
 
     async def get_account_summary(self) -> Dict[str, Any]:
@@ -1126,18 +1214,22 @@ class KalshiClient:
             for pos in positions:
                 position_count = pos.get("position", 0)
                 if position_count != 0:
-                    market_exposure = pos.get("market_exposure", 0) / 100  # Convert cents to dollars
+                    market_exposure = (
+                        pos.get("market_exposure", 0) / 100
+                    )  # Convert cents to dollars
                     realized_pnl = pos.get("realized_pnl", 0) / 100
                     total_exposure += abs(market_exposure)
                     total_realized_pnl += realized_pnl
-                    open_positions.append({
-                        "ticker": pos.get("ticker", ""),
-                        "position": position_count,
-                        "market_exposure": market_exposure,
-                        "realized_pnl": realized_pnl,
-                        "fees_paid": pos.get("fees_paid", 0) / 100,
-                        "total_traded": pos.get("total_traded", 0),
-                    })
+                    open_positions.append(
+                        {
+                            "ticker": pos.get("ticker", ""),
+                            "position": position_count,
+                            "market_exposure": market_exposure,
+                            "realized_pnl": realized_pnl,
+                            "fees_paid": pos.get("fees_paid", 0) / 100,
+                            "total_traded": pos.get("total_traded", 0),
+                        }
+                    )
 
             return {
                 "balance": balance_data.get("balance_dollars", 0),
@@ -1148,7 +1240,7 @@ class KalshiClient:
                 "realized_pnl": total_realized_pnl,
                 "positions": open_positions,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-                "api_connected": True
+                "api_connected": True,
             }
         except Exception as e:
             logger.error(f"Error getting account summary: {e}")
@@ -1162,10 +1254,10 @@ class KalshiClient:
                 "positions": [],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "api_connected": False,
-                "error": str(e)
+                "error": str(e),
             }
 
     async def close(self):
         """Close the HTTP client."""
         if self.client:
-            await self.client.aclose() 
+            await self.client.aclose()

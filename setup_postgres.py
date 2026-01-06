@@ -7,11 +7,11 @@ from psycopg2 import sql
 
 # Database credentials
 DB_CONFIG = {
-    'host': 'ep-flat-silence-ahtaz4uz-pooler.c-3.us-east-1.aws.neon.tech',
-    'database': 'neondb',
-    'user': 'neondb_owner',
-    'password': 'npg_hjmprEz3wJ0B',
-    'sslmode': 'require'
+    "host": "ep-flat-silence-ahtaz4uz-pooler.c-3.us-east-1.aws.neon.tech",
+    "database": "neondb",
+    "user": "neondb_owner",
+    "password": "npg_hjmprEz3wJ0B",
+    "sslmode": "require",
 }
 
 # PostgreSQL Schema
@@ -423,12 +423,14 @@ def setup_database():
         print("\nTables created:")
 
         # List created tables
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT table_name
             FROM information_schema.tables
             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
             ORDER BY table_name
-        """)
+        """
+        )
         tables = cursor.fetchall()
         for table in tables:
             cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
@@ -436,12 +438,14 @@ def setup_database():
             print(f"  - {table[0]}: {count} rows")
 
         print("\nViews created:")
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT table_name
             FROM information_schema.views
             WHERE table_schema = 'public'
             ORDER BY table_name
-        """)
+        """
+        )
         views = cursor.fetchall()
         for view in views:
             print(f"  - {view[0]}")

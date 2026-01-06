@@ -7,16 +7,17 @@ This module provides helpers to:
 - Handle both standard and beta structured output APIs
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar, cast
 import json
+from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar, cast
 
 from pydantic import BaseModel
-
 
 T = TypeVar("T", bound=BaseModel)
 
 
-def _normalize_messages_input(messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_messages_input(
+    messages: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """
     Convert chat-style messages into standard format (list of role/content dicts).
 
@@ -28,7 +29,12 @@ def _normalize_messages_input(messages: Sequence[Dict[str, Any]]) -> List[Dict[s
         if isinstance(content, list):
             normalized.append({"role": msg.get("role", "user"), "content": content})
         else:
-            normalized.append({"role": msg.get("role", "user"), "content": str(content) if content is not None else ""})
+            normalized.append(
+                {
+                    "role": msg.get("role", "user"),
+                    "content": str(content) if content is not None else "",
+                }
+            )
     return normalized
 
 
@@ -41,16 +47,16 @@ def extract_message_text(response: Any) -> str:
     """
     try:
         # SDK response object
-        if hasattr(response, 'choices') and len(response.choices) > 0:
+        if hasattr(response, "choices") and len(response.choices) > 0:
             message = response.choices[0].message
-            if hasattr(message, 'content') and message.content:
+            if hasattr(message, "content") and message.content:
                 return message.content.strip()
         # Dict response
         elif isinstance(response, dict):
-            choices = response.get('choices', [])
+            choices = response.get("choices", [])
             if choices and len(choices) > 0:
-                message = choices[0].get('message', {})
-                content = message.get('content', '')
+                message = choices[0].get("message", {})
+                content = message.get("content", "")
                 if content:
                     return content.strip()
     except Exception:
@@ -160,9 +166,13 @@ async def parse_pydantic_response(
             except Exception:
                 return cast(T, response_format.parse_obj(data))  # type: ignore[attr-defined]
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Structured output parsing failed: invalid JSON in model output: {exc}\nOutput: {text_value[:500]}")
+            raise RuntimeError(
+                f"Structured output parsing failed: invalid JSON in model output: {exc}\nOutput: {text_value[:500]}"
+            )
 
-    raise RuntimeError("Structured output parsing failed: no content found in API response.")
+    raise RuntimeError(
+        "Structured output parsing failed: no content found in API response."
+    )
 
 
 # Backwards compatibility aliases

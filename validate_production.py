@@ -21,11 +21,12 @@ from typing import Optional
 
 # Rich for pretty output
 try:
+    from rich import print as rprint
     from rich.console import Console
-    from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich import print as rprint
+    from rich.table import Table
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -110,7 +111,11 @@ async def timed_check(name: str, check_func) -> ValidationResult:
     """Run a check function and time it."""
     start = time.perf_counter()
     try:
-        result = await check_func() if asyncio.iscoroutinefunction(check_func) else check_func()
+        result = (
+            await check_func()
+            if asyncio.iscoroutinefunction(check_func)
+            else check_func()
+        )
         duration = (time.perf_counter() - start) * 1000
 
         if isinstance(result, tuple):
@@ -133,6 +138,7 @@ async def timed_check(name: str, check_func) -> ValidationResult:
 # PHASE 1: Configuration & Environment
 # =============================================================================
 
+
 async def validate_phase1_config() -> PhaseResult:
     """Validate configuration and environment variables."""
     results = PhaseResult(1, "Configuration & Environment")
@@ -151,6 +157,7 @@ async def validate_phase1_config() -> PhaseResult:
     async def check_config_loads():
         try:
             from config import BotConfig
+
             config = BotConfig()
             return Status.PASS, f"Config loaded (demo={config.kalshi.use_demo})"
         except Exception as e:
@@ -161,6 +168,7 @@ async def validate_phase1_config() -> PhaseResult:
     # Check 3: Kalshi credentials
     async def check_kalshi_creds():
         from config import BotConfig
+
         config = BotConfig()
         if not config.kalshi.api_key:
             return Status.FAIL, "KALSHI_API_KEY not set"
@@ -177,6 +185,7 @@ async def validate_phase1_config() -> PhaseResult:
     # Check 4: OpenAI credentials
     async def check_openai_creds():
         from config import BotConfig
+
         config = BotConfig()
         if not config.openai.api_key:
             return Status.FAIL, "OPENAI_API_KEY not set"
@@ -189,10 +198,17 @@ async def validate_phase1_config() -> PhaseResult:
     # Check 5: Database configuration
     async def check_db_config():
         from config import BotConfig
+
         config = BotConfig()
         if config.database.db_type == "postgres":
-            if not all([config.database.pg_host, config.database.pg_database,
-                       config.database.pg_user, config.database.pg_password]):
+            if not all(
+                [
+                    config.database.pg_host,
+                    config.database.pg_database,
+                    config.database.pg_user,
+                    config.database.pg_password,
+                ]
+            ):
                 return Status.FAIL, "PostgreSQL credentials incomplete"
             return Status.PASS, f"PostgreSQL: {config.database.pg_host}"
         else:
@@ -203,6 +219,7 @@ async def validate_phase1_config() -> PhaseResult:
     # Check 6: Risk parameters
     async def check_risk_params():
         from config import BotConfig
+
         config = BotConfig()
         issues = []
         if config.max_daily_loss <= 0:
@@ -216,13 +233,17 @@ async def validate_phase1_config() -> PhaseResult:
 
         if issues:
             return Status.WARN, "; ".join(issues)
-        return Status.PASS, f"Bankroll=${config.bankroll}, MaxBet=${config.max_bet_amount}"
+        return (
+            Status.PASS,
+            f"Bankroll=${config.bankroll}, MaxBet=${config.max_bet_amount}",
+        )
 
     results.results.append(await timed_check("Risk parameters", check_risk_params))
 
     # Check 7: TrendRadar config (if enabled)
     async def check_trendradar_config():
         from config import BotConfig
+
         config = BotConfig()
         if not config.trendradar.enabled:
             return Status.SKIP, "TrendRadar disabled"
@@ -230,7 +251,9 @@ async def validate_phase1_config() -> PhaseResult:
             return Status.FAIL, "TRENDRADAR_URL not set"
         return Status.PASS, f"TrendRadar: {config.trendradar.base_url}"
 
-    results.results.append(await timed_check("TrendRadar config", check_trendradar_config))
+    results.results.append(
+        await timed_check("TrendRadar config", check_trendradar_config)
+    )
 
     return results
 
@@ -239,6 +262,7 @@ async def validate_phase1_config() -> PhaseResult:
 # PHASE 2: Database Integrity
 # =============================================================================
 
+
 async def validate_phase2_database() -> PhaseResult:
     """Validate database connectivity and schema."""
     results = PhaseResult(2, "Database Integrity")
@@ -246,47 +270,57 @@ async def validate_phase2_database() -> PhaseResult:
     # Check 1: Database connection
     async def check_db_connection():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
 
         await db.connect()
         await db.close()
         return Status.PASS, f"Connected to {config.database.db_type}"
 
-    results.results.append(await timed_check("Database connection", check_db_connection))
+    results.results.append(
+        await timed_check("Database connection", check_db_connection)
+    )
 
     # Check 2: Required tables exist
     async def check_tables():
         from config import BotConfig
+
         config = BotConfig()
 
         required_tables = [
-            "betting_decisions", "market_snapshots", "calibration_records",
-            "performance_daily", "run_history"
+            "betting_decisions",
+            "market_snapshots",
+            "calibration_records",
+            "performance_daily",
+            "run_history",
         ]
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             query = """
@@ -294,9 +328,10 @@ async def validate_phase2_database() -> PhaseResult:
                 WHERE table_schema = 'public'
             """
             result = await db.fetchall(query)
-            existing = {row['table_name'] for row in result}
+            existing = {row["table_name"] for row in result}
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             query = "SELECT name FROM sqlite_master WHERE type='table'"
@@ -314,22 +349,28 @@ async def validate_phase2_database() -> PhaseResult:
     # Check 3: Signal columns exist
     async def check_signal_columns():
         from config import BotConfig
+
         config = BotConfig()
 
         signal_columns = [
-            "signal_applied", "signal_direction", "signal_strength",
-            "signal_sentiment", "confidence_boost", "kelly_multiplier"
+            "signal_applied",
+            "signal_direction",
+            "signal_strength",
+            "signal_sentiment",
+            "confidence_boost",
+            "kelly_multiplier",
         ]
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             query = """
@@ -337,9 +378,10 @@ async def validate_phase2_database() -> PhaseResult:
                 WHERE table_name = 'betting_decisions'
             """
             result = await db.fetchall(query)
-            existing = {row['column_name'] for row in result}
+            existing = {row["column_name"] for row in result}
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             query = "PRAGMA table_info(betting_decisions)"
@@ -357,25 +399,28 @@ async def validate_phase2_database() -> PhaseResult:
     # Check 4: Row counts
     async def check_row_counts():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             counts = {}
             for table in ["betting_decisions", "run_history"]:
                 result = await db.fetchone(f"SELECT COUNT(*) as cnt FROM {table}")
-                counts[table] = result['cnt'] if result else 0
+                counts[table] = result["cnt"] if result else 0
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             counts = {}
@@ -384,24 +429,29 @@ async def validate_phase2_database() -> PhaseResult:
                 counts[table] = result[0][0]
         await db.close()
 
-        return Status.PASS, f"decisions={counts['betting_decisions']}, runs={counts['run_history']}"
+        return (
+            Status.PASS,
+            f"decisions={counts['betting_decisions']}, runs={counts['run_history']}",
+        )
 
     results.results.append(await timed_check("Row counts", check_row_counts))
 
     # Check 5: Data integrity
     async def check_data_integrity():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             # PostgreSQL uses BOOLEAN (TRUE/FALSE)
@@ -410,9 +460,10 @@ async def validate_phase2_database() -> PhaseResult:
                 WHERE signal_applied = TRUE AND signal_direction IS NULL
             """
             result = await db.fetchone(orphan_query)
-            orphans = result['cnt'] if result else 0
+            orphans = result["cnt"] if result else 0
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             # SQLite uses INTEGER (1/0)
@@ -425,7 +476,10 @@ async def validate_phase2_database() -> PhaseResult:
         await db.close()
 
         if orphans > 0:
-            return Status.WARN, f"{orphans} records with signal_applied=TRUE but no direction"
+            return (
+                Status.WARN,
+                f"{orphans} records with signal_applied=TRUE but no direction",
+            )
         return Status.PASS, "No data integrity issues"
 
     results.results.append(await timed_check("Data integrity", check_data_integrity))
@@ -437,14 +491,16 @@ async def validate_phase2_database() -> PhaseResult:
 # PHASE 3: API Integration
 # =============================================================================
 
+
 async def validate_phase3_apis() -> PhaseResult:
     """Validate API connectivity and authentication."""
     results = PhaseResult(3, "API Integration")
 
     # Check 1: Kalshi API - Events (tests authentication)
     async def check_kalshi_events():
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
 
@@ -462,8 +518,9 @@ async def validate_phase3_apis() -> PhaseResult:
 
     # Check 2: Kalshi API - Positions
     async def check_kalshi_positions():
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
 
@@ -475,12 +532,15 @@ async def validate_phase3_apis() -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)
 
-    results.results.append(await timed_check("Kalshi positions", check_kalshi_positions))
+    results.results.append(
+        await timed_check("Kalshi positions", check_kalshi_positions)
+    )
 
     # Check 3: Kalshi API - Markets
     async def check_kalshi_markets():
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
 
@@ -500,17 +560,19 @@ async def validate_phase3_apis() -> PhaseResult:
     # Check 4: OpenAI API - Basic
     async def check_openai_api():
         from config import BotConfig
+
         config = BotConfig()
 
         try:
             from openai import AsyncOpenAI
+
             client = AsyncOpenAI(api_key=config.openai.api_key)
 
             # Simple completion test
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": "Say 'OK'"}],
-                max_tokens=5
+                max_tokens=5,
             )
             if response.choices[0].message.content:
                 return Status.PASS, "OpenAI API responding"
@@ -523,6 +585,7 @@ async def validate_phase3_apis() -> PhaseResult:
     # Check 5: TrendRadar API (if enabled)
     async def check_trendradar():
         from config import BotConfig
+
         config = BotConfig()
 
         if not config.trendradar.enabled:
@@ -530,6 +593,7 @@ async def validate_phase3_apis() -> PhaseResult:
 
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{config.trendradar.base_url}/health")
                 if response.status_code == 200:
@@ -546,6 +610,7 @@ async def validate_phase3_apis() -> PhaseResult:
 # =============================================================================
 # PHASE 4: Trading Logic
 # =============================================================================
+
 
 async def validate_phase4_trading() -> PhaseResult:
     """Validate trading calculations and risk management."""
@@ -565,13 +630,16 @@ async def validate_phase4_trading() -> PhaseResult:
         tests = [
             (0.70, 0.50, 0.40),  # Positive edge
             (0.50, 0.50, 0.00),  # No edge
-            (0.30, 0.50, -0.40), # Negative edge
+            (0.30, 0.50, -0.40),  # Negative edge
         ]
 
         for rp, mp, expected in tests:
             result = calc_r_score(rp, mp)
             if abs(result - expected) > 0.01:
-                return Status.FAIL, f"r_score({rp}, {mp}) = {result}, expected {expected}"
+                return (
+                    Status.FAIL,
+                    f"r_score({rp}, {mp}) = {result}, expected {expected}",
+                )
 
         return Status.PASS, "R-score calculation correct"
 
@@ -602,6 +670,7 @@ async def validate_phase4_trading() -> PhaseResult:
     # Check 3: Bet sizing with caps
     async def check_bet_sizing():
         from config import BotConfig
+
         config = BotConfig()
 
         bankroll = config.bankroll
@@ -623,6 +692,7 @@ async def validate_phase4_trading() -> PhaseResult:
     # Check 4: Kill switch logic
     async def check_kill_switch():
         from config import BotConfig
+
         config = BotConfig()
 
         if not config.enable_kill_switch:
@@ -641,6 +711,7 @@ async def validate_phase4_trading() -> PhaseResult:
     # Check 5: Signal influence bounds
     async def check_signal_influence():
         from config import BotConfig
+
         config = BotConfig()
 
         max_boost = config.trendradar.max_confidence_boost
@@ -659,7 +730,9 @@ async def validate_phase4_trading() -> PhaseResult:
             return Status.WARN, "; ".join(issues)
         return Status.PASS, f"boost={max_boost}, threshold={strong_threshold}"
 
-    results.results.append(await timed_check("Signal influence bounds", check_signal_influence))
+    results.results.append(
+        await timed_check("Signal influence bounds", check_signal_influence)
+    )
 
     return results
 
@@ -667,6 +740,7 @@ async def validate_phase4_trading() -> PhaseResult:
 # =============================================================================
 # PHASE 5: Security
 # =============================================================================
+
 
 async def validate_phase5_security() -> PhaseResult:
     """Validate security configuration and practices."""
@@ -677,14 +751,18 @@ async def validate_phase5_security() -> PhaseResult:
         import re
 
         patterns = [
-            r'sk-[a-zA-Z0-9]{20,}',  # OpenAI key
-            r'-----BEGIN RSA PRIVATE KEY-----',  # Inline private key
+            r"sk-[a-zA-Z0-9]{20,}",  # OpenAI key
+            r"-----BEGIN RSA PRIVATE KEY-----",  # Inline private key
         ]
 
         suspicious_files = []
         for root, dirs, files in os.walk("."):
             # Skip common directories
-            dirs[:] = [d for d in dirs if d not in [".git", ".venv", "venv", "__pycache__", "node_modules"]]
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in [".git", ".venv", "venv", "__pycache__", "node_modules"]
+            ]
 
             for file in files:
                 if file.endswith(".py") and file != "validate_production.py":
@@ -703,7 +781,9 @@ async def validate_phase5_security() -> PhaseResult:
             return Status.WARN, f"Potential secrets in: {suspicious_files[:3]}"
         return Status.PASS, "No hardcoded secrets found"
 
-    results.results.append(await timed_check("No hardcoded secrets", check_no_hardcoded_secrets))
+    results.results.append(
+        await timed_check("No hardcoded secrets", check_no_hardcoded_secrets)
+    )
 
     # Check 2: .gitignore includes sensitive files
     async def check_gitignore():
@@ -725,19 +805,22 @@ async def validate_phase5_security() -> PhaseResult:
     # Check 3: Environment isolation
     async def check_env_isolation():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.kalshi.use_demo:
             return Status.PASS, "Using demo environment"
         return Status.WARN, "LIVE trading mode - verify intentional"
 
-    results.results.append(await timed_check("Environment isolation", check_env_isolation))
+    results.results.append(
+        await timed_check("Environment isolation", check_env_isolation)
+    )
 
     # Check 4: Logging doesn't expose secrets
     async def check_logging_safe():
         # Check log files for secrets
         log_files = ["bot_output.log", "trading_bot.log"]
-        patterns = [r'sk-', r'BEGIN RSA', r'password']
+        patterns = [r"sk-", r"BEGIN RSA", r"password"]
 
         for log_file in log_files:
             if os.path.exists(log_file):
@@ -758,6 +841,7 @@ async def validate_phase5_security() -> PhaseResult:
 # PHASE 6: Performance
 # =============================================================================
 
+
 async def validate_phase6_performance() -> PhaseResult:
     """Validate system performance."""
     results = PhaseResult(6, "Performance")
@@ -765,17 +849,19 @@ async def validate_phase6_performance() -> PhaseResult:
     # Check 1: Database query performance
     async def check_db_query_perf():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             start = time.perf_counter()
@@ -783,6 +869,7 @@ async def validate_phase6_performance() -> PhaseResult:
             duration_ms = (time.perf_counter() - start) * 1000
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             start = time.perf_counter()
@@ -795,12 +882,15 @@ async def validate_phase6_performance() -> PhaseResult:
             return Status.WARN, f"Slow query: {duration_ms:.0f}ms"
         return Status.PASS, f"Query time: {duration_ms:.0f}ms"
 
-    results.results.append(await timed_check("Database query speed", check_db_query_perf))
+    results.results.append(
+        await timed_check("Database query speed", check_db_query_perf)
+    )
 
     # Check 2: API response time
     async def check_api_perf():
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
 
@@ -819,6 +909,7 @@ async def validate_phase6_performance() -> PhaseResult:
     async def check_memory():
         try:
             import psutil
+
             process = psutil.Process()
             memory_mb = process.memory_info().rss / 1024 / 1024
 
@@ -837,6 +928,7 @@ async def validate_phase6_performance() -> PhaseResult:
 # PHASE 7: Operational Readiness
 # =============================================================================
 
+
 async def validate_phase7_operations() -> PhaseResult:
     """Validate operational readiness."""
     results = PhaseResult(7, "Operational Readiness")
@@ -845,6 +937,7 @@ async def validate_phase7_operations() -> PhaseResult:
     async def check_dashboard():
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get("http://localhost:8000/api/status")
                 if response.status_code == 200:
@@ -858,34 +951,41 @@ async def validate_phase7_operations() -> PhaseResult:
     # Check 2: Recent run history
     async def check_recent_runs():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             # PostgreSQL - column is started_at, use fetchone
-            result = await db.fetchone("""
+            result = await db.fetchone(
+                """
                 SELECT COUNT(*) as cnt FROM run_history
                 WHERE started_at > NOW() - INTERVAL '7 days'
-            """)
-            recent_runs = result['cnt'] if result else 0
+            """
+            )
+            recent_runs = result["cnt"] if result else 0
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
             # SQLite - column is started_at
-            result = await db.execute("""
+            result = await db.execute(
+                """
                 SELECT COUNT(*) FROM run_history
                 WHERE started_at > datetime('now', '-7 days')
-            """)
+            """
+            )
             recent_runs = result[0][0]
 
         await db.close()
@@ -899,32 +999,39 @@ async def validate_phase7_operations() -> PhaseResult:
     # Check 3: Reconciliation status
     async def check_reconciliation():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
-            result = await db.fetchone("""
+            result = await db.fetchone(
+                """
                 SELECT COUNT(*) as cnt FROM betting_decisions
                 WHERE status = 'pending'
-            """)
-            pending = result['cnt'] if result else 0
+            """
+            )
+            pending = result["cnt"] if result else 0
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
-            result = await db.execute("""
+            result = await db.execute(
+                """
                 SELECT COUNT(*) FROM betting_decisions
                 WHERE status = 'pending'
-            """)
+            """
+            )
             pending = result[0][0]
         await db.close()
 
@@ -932,7 +1039,9 @@ async def validate_phase7_operations() -> PhaseResult:
             return Status.WARN, f"{pending} pending decisions need reconciliation"
         return Status.PASS, f"{pending} pending decisions"
 
-    results.results.append(await timed_check("Reconciliation status", check_reconciliation))
+    results.results.append(
+        await timed_check("Reconciliation status", check_reconciliation)
+    )
 
     # Check 4: Log file accessible
     async def check_logs():
@@ -950,6 +1059,7 @@ async def validate_phase7_operations() -> PhaseResult:
 # =============================================================================
 # Main Execution
 # =============================================================================
+
 
 async def run_all_validations(phases: list[int] = None) -> list[PhaseResult]:
     """Run all validation phases."""
@@ -979,8 +1089,10 @@ async def run_all_validations(phases: list[int] = None) -> list[PhaseResult]:
 
             # Summary
             if console:
-                console.print(f"\n  Summary: {phase_result.passed} passed, "
-                            f"{phase_result.failed} failed, {phase_result.warnings} warnings\n")
+                console.print(
+                    f"\n  Summary: {phase_result.passed} passed, "
+                    f"{phase_result.failed} failed, {phase_result.warnings} warnings\n"
+                )
         except Exception as e:
             if console:
                 console.print(f"  [red]Phase failed with error: {e}[/red]\n")
@@ -1016,29 +1128,33 @@ def print_summary(results: list[PhaseResult]):
                 str(r.passed),
                 str(r.failed),
                 str(r.warnings),
-                status
+                status,
             )
 
         console.print(table)
         console.print()
 
         if all_passed:
-            console.print(Panel(
-                f"[bold green]ALL VALIDATIONS PASSED[/bold green]\n\n"
-                f"Total: {total_passed}/{total_tests} checks passed\n"
-                f"Warnings: {total_warnings}\n\n"
-                f"System is ready for production!",
-                style="green"
-            ))
+            console.print(
+                Panel(
+                    f"[bold green]ALL VALIDATIONS PASSED[/bold green]\n\n"
+                    f"Total: {total_passed}/{total_tests} checks passed\n"
+                    f"Warnings: {total_warnings}\n\n"
+                    f"System is ready for production!",
+                    style="green",
+                )
+            )
         else:
-            console.print(Panel(
-                f"[bold red]VALIDATION FAILED[/bold red]\n\n"
-                f"Total: {total_passed}/{total_tests} checks passed\n"
-                f"Failed: {total_failed}\n"
-                f"Warnings: {total_warnings}\n\n"
-                f"Fix failures before going live.",
-                style="red"
-            ))
+            console.print(
+                Panel(
+                    f"[bold red]VALIDATION FAILED[/bold red]\n\n"
+                    f"Total: {total_passed}/{total_tests} checks passed\n"
+                    f"Failed: {total_failed}\n"
+                    f"Warnings: {total_warnings}\n\n"
+                    f"Fix failures before going live.",
+                    style="red",
+                )
+            )
     else:
         print(f"\nTotal: {total_passed}/{total_tests} passed")
         print(f"Failed: {total_failed}")
@@ -1057,15 +1173,18 @@ async def main():
 
     parser = argparse.ArgumentParser(description="Production Validation Script")
     parser.add_argument("--phase", type=int, help="Run specific phase (1-7)")
-    parser.add_argument("--quick", action="store_true", help="Quick checks only (phases 1-2)")
+    parser.add_argument(
+        "--quick", action="store_true", help="Quick checks only (phases 1-2)"
+    )
     args = parser.parse_args()
 
     if console:
-        console.print(Panel(
-            "[bold]Kalshi Deep Trading Bot[/bold]\n"
-            "Production Validation Script",
-            style="blue"
-        ))
+        console.print(
+            Panel(
+                "[bold]Kalshi Deep Trading Bot[/bold]\n" "Production Validation Script",
+                style="blue",
+            )
+        )
 
     # Change to project directory
     script_dir = os.path.dirname(os.path.abspath(__file__))

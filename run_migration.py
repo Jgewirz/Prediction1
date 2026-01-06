@@ -1,11 +1,13 @@
 """
 Run database migration for position tracking.
 """
+
 import asyncio
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
 import asyncpg
+from dotenv import load_dotenv
 from loguru import logger
 
 load_dotenv()
@@ -32,13 +34,15 @@ async def run_migration():
             user=user,
             password=password,
             database=database,
-            ssl=ssl
+            ssl=ssl,
         )
 
         print("Connected successfully!")
 
         # Read migration file
-        migration_path = Path(__file__).parent / "db" / "migrations" / "002_position_tracking.sql"
+        migration_path = (
+            Path(__file__).parent / "db" / "migrations" / "002_position_tracking.sql"
+        )
 
         if not migration_path.exists():
             print(f"Migration file not found: {migration_path}")
@@ -55,43 +59,50 @@ async def run_migration():
         current_statement = []
         in_function = False
 
-        for line in migration_sql.split('\n'):
+        for line in migration_sql.split("\n"):
             stripped = line.strip()
 
             # Track if we're inside a function definition
-            if 'CREATE OR REPLACE FUNCTION' in line.upper() or 'CREATE FUNCTION' in line.upper():
+            if (
+                "CREATE OR REPLACE FUNCTION" in line.upper()
+                or "CREATE FUNCTION" in line.upper()
+            ):
                 in_function = True
 
-            if stripped.startswith('--') or not stripped:
+            if stripped.startswith("--") or not stripped:
                 continue
 
             current_statement.append(line)
 
             # Check if statement is complete
             if in_function:
-                if '$$ LANGUAGE' in line:
+                if "$$ LANGUAGE" in line:
                     in_function = False
-                    statements.append('\n'.join(current_statement))
+                    statements.append("\n".join(current_statement))
                     current_statement = []
-            elif stripped.endswith(';') and not in_function:
-                statements.append('\n'.join(current_statement))
+            elif stripped.endswith(";") and not in_function:
+                statements.append("\n".join(current_statement))
                 current_statement = []
 
         # Add any remaining statement
         if current_statement:
-            statements.append('\n'.join(current_statement))
+            statements.append("\n".join(current_statement))
 
         success_count = 0
         error_count = 0
 
         for i, stmt in enumerate(statements):
             stmt = stmt.strip()
-            if not stmt or stmt.startswith('--'):
+            if not stmt or stmt.startswith("--"):
                 continue
 
             try:
                 # Get first 60 chars for logging
-                preview = stmt[:60].replace('\n', ' ') + "..." if len(stmt) > 60 else stmt.replace('\n', ' ')
+                preview = (
+                    stmt[:60].replace("\n", " ") + "..."
+                    if len(stmt) > 60
+                    else stmt.replace("\n", " ")
+                )
                 print(f"[{i+1}/{len(statements)}] {preview}")
 
                 await conn.execute(stmt)
@@ -114,7 +125,9 @@ async def run_migration():
                 error_count += 1
 
         print("-" * 50)
-        print(f"Migration complete: {success_count} statements succeeded, {error_count} errors")
+        print(
+            f"Migration complete: {success_count} statements succeeded, {error_count} errors"
+        )
 
         # Verify the new columns exist
         print("\nVerifying new columns in betting_decisions...")
@@ -142,21 +155,25 @@ async def run_migration():
 
         # Check if position_snapshots table exists
         print("\nChecking for position_snapshots table...")
-        table_check = await conn.fetchval("""
+        table_check = await conn.fetchval(
+            """
             SELECT EXISTS (
                 SELECT FROM information_schema.tables
                 WHERE table_name = 'position_snapshots'
             )
-        """)
+        """
+        )
         print(f"position_snapshots table exists: {table_check}")
 
         # Check if exit_events table exists
-        table_check = await conn.fetchval("""
+        table_check = await conn.fetchval(
+            """
             SELECT EXISTS (
                 SELECT FROM information_schema.tables
                 WHERE table_name = 'exit_events'
             )
-        """)
+        """
+        )
         print(f"exit_events table exists: {table_check}")
 
         await conn.close()
@@ -166,6 +183,7 @@ async def run_migration():
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

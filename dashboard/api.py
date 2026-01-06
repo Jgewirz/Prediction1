@@ -2,30 +2,33 @@
 Dashboard API - FastAPI server for Kalshi Trading Bot Dashboard.
 Provides endpoints for decisions, KPIs, WebSocket real-time updates, and serves the dashboard UI.
 """
+
+import asyncio
 import os
 import sys
-import asyncio
-from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect, Depends
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import (Depends, FastAPI, HTTPException, Query, WebSocket,
+                     WebSocketDisconnect)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import load_config
+from dashboard.websocket import (MessageType, WebSocketMessage,
+                                 handle_websocket, manager)
 from db import get_database, get_postgres_database
-from dashboard.websocket import manager, handle_websocket, WebSocketMessage, MessageType
 
 app = FastAPI(
     title="Kalshi Trading Bot Dashboard",
     description="Real-time dashboard for monitoring trading decisions and performance",
-    version="2.0.0"
+    version="2.0.0",
 )
 
 # CORS middleware for development
@@ -54,7 +57,7 @@ async def get_db():
                 user=_config.database.pg_user,
                 password=_config.database.pg_password,
                 port=_config.database.pg_port,
-                ssl=_config.database.pg_ssl
+                ssl=_config.database.pg_ssl,
             )
         else:
             _db = await get_database(_config.database.db_path)
@@ -68,6 +71,7 @@ if static_dir.exists():
 
 
 # === Response Models ===
+
 
 class DecisionRow(BaseModel):
     decision_id: str
@@ -124,6 +128,7 @@ class StatusResponse(BaseModel):
 
 # === Endpoints ===
 
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Serve the main dashboard page."""
@@ -170,7 +175,9 @@ async def get_decisions(
         param_idx += 1
 
     if search:
-        conditions.append(f"(event_title ILIKE ${param_idx} OR market_title ILIKE ${param_idx})")
+        conditions.append(
+            f"(event_title ILIKE ${param_idx} OR market_title ILIKE ${param_idx})"
+        )
         params.append(f"%{search}%")
         param_idx += 1
 
@@ -194,7 +201,9 @@ async def get_decisions(
     order = "DESC" if sort_order.lower() == "desc" else "ASC"
 
     # Count total
-    count_query = f"SELECT COUNT(*) as count FROM betting_decisions WHERE {where_clause}"
+    count_query = (
+        f"SELECT COUNT(*) as count FROM betting_decisions WHERE {where_clause}"
+    )
     count_result = await db.fetchone(count_query, *params)
     total = count_result["count"] if count_result else 0
 
@@ -219,37 +228,57 @@ async def get_decisions(
 
     decisions = []
     for row in rows:
-        decisions.append({
-            "decision_id": row["decision_id"],
-            "timestamp": str(row["timestamp"]) if row["timestamp"] else "",
-            "event_ticker": row["event_ticker"] or "",
-            "event_title": row["event_title"] or "",
-            "market_ticker": row["market_ticker"] or "",
-            "market_title": row["market_title"] or "",
-            "action": row["action"] or "",
-            "bet_amount": float(row["bet_amount"]) if row["bet_amount"] else 0,
-            "confidence": float(row["confidence"]) if row["confidence"] else 0,
-            "reasoning": row["reasoning"] or "",
-            "research_probability": float(row["research_probability"]) if row["research_probability"] else None,
-            "calc_market_prob": float(row["calc_market_prob"]) if row["calc_market_prob"] else None,
-            "r_score": float(row["r_score"]) if row["r_score"] else None,
-            "kelly_fraction": float(row["kelly_fraction"]) if row["kelly_fraction"] else None,
-            "expected_return": float(row["expected_return"]) if row["expected_return"] else None,
-            "status": row["status"] or "pending",
-            "is_hedge": bool(row["is_hedge"]) if row["is_hedge"] else False,
-            # TrendRadar fields
-            "run_mode": row.get("run_mode"),
-            "signal_applied": bool(row.get("signal_applied")) if row.get("signal_applied") else False,
-            "signal_direction": row.get("signal_direction"),
-            "signal_strength": float(row["signal_strength"]) if row.get("signal_strength") else None,
-        })
+        decisions.append(
+            {
+                "decision_id": row["decision_id"],
+                "timestamp": str(row["timestamp"]) if row["timestamp"] else "",
+                "event_ticker": row["event_ticker"] or "",
+                "event_title": row["event_title"] or "",
+                "market_ticker": row["market_ticker"] or "",
+                "market_title": row["market_title"] or "",
+                "action": row["action"] or "",
+                "bet_amount": float(row["bet_amount"]) if row["bet_amount"] else 0,
+                "confidence": float(row["confidence"]) if row["confidence"] else 0,
+                "reasoning": row["reasoning"] or "",
+                "research_probability": (
+                    float(row["research_probability"])
+                    if row["research_probability"]
+                    else None
+                ),
+                "calc_market_prob": (
+                    float(row["calc_market_prob"]) if row["calc_market_prob"] else None
+                ),
+                "r_score": float(row["r_score"]) if row["r_score"] else None,
+                "kelly_fraction": (
+                    float(row["kelly_fraction"]) if row["kelly_fraction"] else None
+                ),
+                "expected_return": (
+                    float(row["expected_return"]) if row["expected_return"] else None
+                ),
+                "status": row["status"] or "pending",
+                "is_hedge": bool(row["is_hedge"]) if row["is_hedge"] else False,
+                # TrendRadar fields
+                "run_mode": row.get("run_mode"),
+                "signal_applied": (
+                    bool(row.get("signal_applied"))
+                    if row.get("signal_applied")
+                    else False
+                ),
+                "signal_direction": row.get("signal_direction"),
+                "signal_strength": (
+                    float(row["signal_strength"])
+                    if row.get("signal_strength")
+                    else None
+                ),
+            }
+        )
 
     return {
         "decisions": decisions,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page if per_page > 0 else 1
+        "pages": (total + per_page - 1) // per_page if per_page > 0 else 1,
     }
 
 
@@ -317,7 +346,7 @@ async def get_kpis(period: str = Query("7d")) -> KPISummary:
             total_decisions=0,
             actionable_bets=0,
             skip_count=0,
-            skip_rate=0
+            skip_rate=0,
         )
 
     total = row["total_decisions"] or 0
@@ -328,7 +357,9 @@ async def get_kpis(period: str = Query("7d")) -> KPISummary:
     return KPISummary(
         period=period,
         realized_pnl=float(row["realized_pnl"]) if row["realized_pnl"] else 0,
-        unrealized_exposure=float(row["unrealized_exposure"]) if row["unrealized_exposure"] else 0,
+        unrealized_exposure=(
+            float(row["unrealized_exposure"]) if row["unrealized_exposure"] else 0
+        ),
         win_rate=(wins / settled * 100) if settled > 0 else 0,
         avg_edge=float(row["avg_edge"]) * 100 if row["avg_edge"] else 0,
         avg_confidence=float(row["avg_confidence"]) if row["avg_confidence"] else 0,
@@ -339,7 +370,7 @@ async def get_kpis(period: str = Query("7d")) -> KPISummary:
         skip_rate=(skip_count / total * 100) if total > 0 else 0,
         trendradar_aligned=row["trendradar_aligned"] or 0,
         trendradar_conflicts=row["trendradar_conflicts"] or 0,
-        override_count=row["override_count"] or 0
+        override_count=row["override_count"] or 0,
     )
 
 
@@ -368,7 +399,7 @@ async def get_status() -> StatusResponse:
         trendradar_enabled=config.trendradar.enabled if config else False,
         database_connected=True,
         total_decisions=stats.get("total_decisions", 0),
-        pending_decisions=stats.get("pending_decisions", 0)
+        pending_decisions=stats.get("pending_decisions", 0),
     )
 
 
@@ -384,6 +415,7 @@ async def startup():
 
 
 # === Learning Metrics ===
+
 
 @app.get("/api/learning/calibration")
 async def get_calibration_metrics() -> Dict[str, Any]:
@@ -464,40 +496,74 @@ async def get_calibration_metrics() -> Dict[str, Any]:
 
     # Calculate overconfidence bias
     overconfidence_bias = 0.0
-    if summary and summary.get("avg_predicted_prob") and summary.get("avg_actual_outcome"):
-        overconfidence_bias = (summary["avg_predicted_prob"] - summary["avg_actual_outcome"]) * 100
+    if (
+        summary
+        and summary.get("avg_predicted_prob")
+        and summary.get("avg_actual_outcome")
+    ):
+        overconfidence_bias = (
+            summary["avg_predicted_prob"] - summary["avg_actual_outcome"]
+        ) * 100
 
     return {
         "summary": {
             "total_settled": summary["total_settled"] if summary else 0,
-            "win_rate": round(summary["win_rate"] * 100, 2) if summary and summary["win_rate"] else 0,
-            "total_pnl": round(summary["total_pnl"], 2) if summary and summary["total_pnl"] else 0,
-            "roi_pct": round(summary["roi_pct"], 2) if summary and summary["roi_pct"] else 0,
-            "brier_score": round(summary["brier_score"], 4) if summary and summary["brier_score"] else 0,
-            "avg_r_score": round(summary["avg_r_score"], 2) if summary and summary["avg_r_score"] else 0,
-            "overconfidence_bias": round(overconfidence_bias, 2)
+            "win_rate": (
+                round(summary["win_rate"] * 100, 2)
+                if summary and summary["win_rate"]
+                else 0
+            ),
+            "total_pnl": (
+                round(summary["total_pnl"], 2)
+                if summary and summary["total_pnl"]
+                else 0
+            ),
+            "roi_pct": (
+                round(summary["roi_pct"], 2) if summary and summary["roi_pct"] else 0
+            ),
+            "brier_score": (
+                round(summary["brier_score"], 4)
+                if summary and summary["brier_score"]
+                else 0
+            ),
+            "avg_r_score": (
+                round(summary["avg_r_score"], 2)
+                if summary and summary["avg_r_score"]
+                else 0
+            ),
+            "overconfidence_bias": round(overconfidence_bias, 2),
         },
-        "calibration_by_bucket": [
-            {
-                "bucket": b["prob_bucket"],
-                "count": b["count"],
-                "avg_predicted": round(b["avg_predicted"], 1),
-                "avg_actual": round(b["avg_actual"], 1),
-                "calibration_error": round(b["calibration_error"], 1)
-            }
-            for b in buckets
-        ] if buckets else [],
-        "rscore_effectiveness": [
-            {
-                "bucket": r["r_score_bucket"],
-                "count": r["count"],
-                "win_rate": round(r["win_rate"], 1),
-                "total_pnl": round(r["total_pnl"], 2) if r["total_pnl"] else 0,
-                "avg_pnl": round(r["avg_pnl"], 2) if r["avg_pnl"] else 0
-            }
-            for r in rscore_metrics
-        ] if rscore_metrics else [],
-        "recommendations": _generate_learning_recommendations(summary, buckets, overconfidence_bias)
+        "calibration_by_bucket": (
+            [
+                {
+                    "bucket": b["prob_bucket"],
+                    "count": b["count"],
+                    "avg_predicted": round(b["avg_predicted"], 1),
+                    "avg_actual": round(b["avg_actual"], 1),
+                    "calibration_error": round(b["calibration_error"], 1),
+                }
+                for b in buckets
+            ]
+            if buckets
+            else []
+        ),
+        "rscore_effectiveness": (
+            [
+                {
+                    "bucket": r["r_score_bucket"],
+                    "count": r["count"],
+                    "win_rate": round(r["win_rate"], 1),
+                    "total_pnl": round(r["total_pnl"], 2) if r["total_pnl"] else 0,
+                    "avg_pnl": round(r["avg_pnl"], 2) if r["avg_pnl"] else 0,
+                }
+                for r in rscore_metrics
+            ]
+            if rscore_metrics
+            else []
+        ),
+        "recommendations": _generate_learning_recommendations(
+            summary, buckets, overconfidence_bias
+        ),
     }
 
 
@@ -508,57 +574,70 @@ def _generate_learning_recommendations(summary, buckets, overconfidence_bias):
     if summary:
         # Check for overconfidence
         if overconfidence_bias > 5:
-            recommendations.append({
-                "type": "calibration",
-                "severity": "warning",
-                "message": f"System is overconfident by {overconfidence_bias:.1f}%. Consider reducing research probability estimates."
-            })
+            recommendations.append(
+                {
+                    "type": "calibration",
+                    "severity": "warning",
+                    "message": f"System is overconfident by {overconfidence_bias:.1f}%. Consider reducing research probability estimates.",
+                }
+            )
         elif overconfidence_bias < -5:
-            recommendations.append({
-                "type": "calibration",
-                "severity": "info",
-                "message": f"System is underconfident by {abs(overconfidence_bias):.1f}%. Consider increasing research probability estimates."
-            })
+            recommendations.append(
+                {
+                    "type": "calibration",
+                    "severity": "info",
+                    "message": f"System is underconfident by {abs(overconfidence_bias):.1f}%. Consider increasing research probability estimates.",
+                }
+            )
 
         # Check Brier score (lower is better, <0.25 is good)
         brier = summary.get("brier_score", 0)
         if brier and brier > 0.25:
-            recommendations.append({
-                "type": "accuracy",
-                "severity": "warning",
-                "message": f"Brier score ({brier:.3f}) indicates room for improvement. Target is <0.25."
-            })
+            recommendations.append(
+                {
+                    "type": "accuracy",
+                    "severity": "warning",
+                    "message": f"Brier score ({brier:.3f}) indicates room for improvement. Target is <0.25.",
+                }
+            )
 
         # Check ROI
         roi = summary.get("roi_pct", 0)
         if roi and roi < 0:
-            recommendations.append({
-                "type": "profitability",
-                "severity": "critical",
-                "message": f"Negative ROI ({roi:.1f}%). Review position sizing and entry criteria."
-            })
+            recommendations.append(
+                {
+                    "type": "profitability",
+                    "severity": "critical",
+                    "message": f"Negative ROI ({roi:.1f}%). Review position sizing and entry criteria.",
+                }
+            )
 
     # Check calibration by bucket
     if buckets:
         for bucket in buckets:
             if bucket["calibration_error"] > 15:
-                recommendations.append({
-                    "type": "bucket_calibration",
-                    "severity": "warning",
-                    "message": f"Large calibration error ({bucket['calibration_error']:.1f}%) in {bucket['prob_bucket']} bucket."
-                })
+                recommendations.append(
+                    {
+                        "type": "bucket_calibration",
+                        "severity": "warning",
+                        "message": f"Large calibration error ({bucket['calibration_error']:.1f}%) in {bucket['prob_bucket']} bucket.",
+                    }
+                )
 
     if not recommendations:
-        recommendations.append({
-            "type": "status",
-            "severity": "success",
-            "message": "System is well-calibrated. Continue monitoring."
-        })
+        recommendations.append(
+            {
+                "type": "status",
+                "severity": "success",
+                "message": "System is well-calibrated. Continue monitoring.",
+            }
+        )
 
     return recommendations
 
 
 # === Health Check ===
+
 
 @app.get("/api/health")
 async def health_check():
@@ -568,13 +647,13 @@ async def health_check():
         return {
             "status": "healthy",
             "database": "connected",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
 
 
@@ -603,55 +682,82 @@ async def get_data_freshness():
         last_decision_age_seconds = None
         last_run_age_seconds = None
 
-        if last_decision and last_decision.get('timestamp'):
-            last_ts = last_decision['timestamp']
+        if last_decision and last_decision.get("timestamp"):
+            last_ts = last_decision["timestamp"]
             if isinstance(last_ts, str):
-                last_ts = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                last_ts = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
             if last_ts.tzinfo is not None:
                 last_ts = last_ts.replace(tzinfo=None)
             last_decision_age_seconds = (now - last_ts).total_seconds()
 
-        if last_run and last_run.get('started_at'):
-            run_ts = last_run['started_at']
+        if last_run and last_run.get("started_at"):
+            run_ts = last_run["started_at"]
             if isinstance(run_ts, str):
-                run_ts = datetime.fromisoformat(run_ts.replace('Z', '+00:00'))
+                run_ts = datetime.fromisoformat(run_ts.replace("Z", "+00:00"))
             if run_ts.tzinfo is not None:
                 run_ts = run_ts.replace(tzinfo=None)
             last_run_age_seconds = (now - run_ts).total_seconds()
 
         # Stale if no decisions or >20 minutes since last decision
-        is_stale = last_decision_age_seconds is None or last_decision_age_seconds > 20 * 60
+        is_stale = (
+            last_decision_age_seconds is None or last_decision_age_seconds > 20 * 60
+        )
 
         return {
             "status": "fresh" if not is_stale else "stale",
-            "last_decision": {
-                "timestamp": str(last_decision['timestamp']) if last_decision and last_decision.get('timestamp') else None,
-                "age_seconds": round(last_decision_age_seconds, 1) if last_decision_age_seconds else None,
-                "age_minutes": round(last_decision_age_seconds / 60, 1) if last_decision_age_seconds else None,
-                "market_ticker": last_decision.get('market_ticker') if last_decision else None,
-                "action": last_decision.get('action') if last_decision else None,
-            } if last_decision else None,
-            "last_run": {
-                "run_id": last_run.get('run_id') if last_run else None,
-                "started_at": str(last_run.get('started_at')) if last_run else None,
-                "status": last_run.get('status') if last_run else None,
-                "age_seconds": round(last_run_age_seconds, 1) if last_run_age_seconds else None,
-            } if last_run else None,
+            "last_decision": (
+                {
+                    "timestamp": (
+                        str(last_decision["timestamp"])
+                        if last_decision and last_decision.get("timestamp")
+                        else None
+                    ),
+                    "age_seconds": (
+                        round(last_decision_age_seconds, 1)
+                        if last_decision_age_seconds
+                        else None
+                    ),
+                    "age_minutes": (
+                        round(last_decision_age_seconds / 60, 1)
+                        if last_decision_age_seconds
+                        else None
+                    ),
+                    "market_ticker": (
+                        last_decision.get("market_ticker") if last_decision else None
+                    ),
+                    "action": last_decision.get("action") if last_decision else None,
+                }
+                if last_decision
+                else None
+            ),
+            "last_run": (
+                {
+                    "run_id": last_run.get("run_id") if last_run else None,
+                    "started_at": str(last_run.get("started_at")) if last_run else None,
+                    "status": last_run.get("status") if last_run else None,
+                    "age_seconds": (
+                        round(last_run_age_seconds, 1) if last_run_age_seconds else None
+                    ),
+                }
+                if last_run
+                else None
+            ),
             "is_stale": is_stale,
             "expected_interval_minutes": 15,
             "stale_threshold_minutes": 20,
-            "checked_at": now.isoformat()
+            "checked_at": now.isoformat(),
         }
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
             "is_stale": True,
-            "checked_at": datetime.utcnow().isoformat()
+            "checked_at": datetime.utcnow().isoformat(),
         }
 
 
 # === WebSocket Endpoints ===
+
 
 @app.websocket("/ws/live")
 async def websocket_endpoint(websocket: WebSocket):
@@ -679,6 +785,7 @@ async def get_websocket_stats() -> Dict[str, Any]:
 
 
 # === Broadcast Helper Endpoints (for bot integration) ===
+
 
 @app.post("/api/broadcast/decision")
 async def broadcast_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
@@ -722,10 +829,18 @@ async def broadcast_kpis_update() -> Dict[str, Any]:
         kpis = {
             "period": "7d",
             "realized_pnl": float(row["realized_pnl"]) if row["realized_pnl"] else 0,
-            "unrealized_exposure": float(row["unrealized_exposure"]) if row["unrealized_exposure"] else 0,
-            "win_rate": (row["wins"] / row["settled_count"] * 100) if row["settled_count"] > 0 else 0,
+            "unrealized_exposure": (
+                float(row["unrealized_exposure"]) if row["unrealized_exposure"] else 0
+            ),
+            "win_rate": (
+                (row["wins"] / row["settled_count"] * 100)
+                if row["settled_count"] > 0
+                else 0
+            ),
             "avg_edge": float(row["avg_edge"]) * 100 if row["avg_edge"] else 0,
-            "avg_confidence": float(row["avg_confidence"]) if row["avg_confidence"] else 0,
+            "avg_confidence": (
+                float(row["avg_confidence"]) if row["avg_confidence"] else 0
+            ),
             "avg_r_score": float(row["avg_r_score"]) if row["avg_r_score"] else 0,
             "total_decisions": row["total_decisions"] or 0,
             "actionable_bets": row["actionable_bets"] or 0,
@@ -808,6 +923,7 @@ async def broadcast_account_data(account: Dict[str, Any]) -> Dict[str, Any]:
 
 # === Real Kalshi Account Endpoint ===
 
+
 @app.get("/api/account")
 async def get_kalshi_account() -> Dict[str, Any]:
     """
@@ -820,8 +936,8 @@ async def get_kalshi_account() -> Dict[str, Any]:
     - positions: List of open positions with P&L
     - api_connected: Whether Kalshi API is accessible
     """
-    from kalshi_client import KalshiClient
     from config import load_config
+    from kalshi_client import KalshiClient
 
     try:
         config = load_config()
@@ -842,7 +958,7 @@ async def get_kalshi_account() -> Dict[str, Any]:
             "realized_pnl": 0,
             "positions": [],
             "api_connected": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -852,8 +968,8 @@ async def get_kalshi_positions() -> Dict[str, Any]:
     Get detailed position data from Kalshi API.
     Returns all current positions with market info.
     """
-    from kalshi_client import KalshiClient
     from config import load_config
+    from kalshi_client import KalshiClient
 
     try:
         config = load_config()
@@ -867,32 +983,36 @@ async def get_kalshi_positions() -> Dict[str, Any]:
         open_positions = []
         for pos in positions:
             if pos.get("position", 0) != 0:
-                open_positions.append({
-                    "ticker": pos.get("ticker", ""),
-                    "position": pos.get("position", 0),
-                    "market_exposure": pos.get("market_exposure", 0) / 100,
-                    "realized_pnl": pos.get("realized_pnl", 0) / 100,
-                    "fees_paid": pos.get("fees_paid", 0) / 100,
-                    "total_traded": pos.get("total_traded", 0),
-                    "total_traded_dollars": pos.get("total_traded_dollars", 0) / 100,
-                    "last_updated": pos.get("last_updated_ts", 0),
-                })
+                open_positions.append(
+                    {
+                        "ticker": pos.get("ticker", ""),
+                        "position": pos.get("position", 0),
+                        "market_exposure": pos.get("market_exposure", 0) / 100,
+                        "realized_pnl": pos.get("realized_pnl", 0) / 100,
+                        "fees_paid": pos.get("fees_paid", 0) / 100,
+                        "total_traded": pos.get("total_traded", 0),
+                        "total_traded_dollars": pos.get("total_traded_dollars", 0)
+                        / 100,
+                        "last_updated": pos.get("last_updated_ts", 0),
+                    }
+                )
 
         return {
             "positions": open_positions,
             "total_count": len(open_positions),
-            "api_connected": True
+            "api_connected": True,
         }
     except Exception as e:
         return {
             "positions": [],
             "total_count": 0,
             "api_connected": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
 # === Time Series Chart Endpoints ===
+
 
 @app.get("/api/charts/pnl-curve")
 async def get_pnl_curve(days: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
@@ -918,23 +1038,23 @@ async def get_pnl_curve(days: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
     data = []
     for row in rows:
         cumulative += float(row["daily_pnl"]) if row["daily_pnl"] else 0
-        data.append({
-            "date": str(row["date"]),
-            "daily_pnl": float(row["daily_pnl"]) if row["daily_pnl"] else 0,
-            "cumulative_pnl": cumulative,
-            "trades": row["trades"],
-            "wins": row["wins"]
-        })
+        data.append(
+            {
+                "date": str(row["date"]),
+                "daily_pnl": float(row["daily_pnl"]) if row["daily_pnl"] else 0,
+                "cumulative_pnl": cumulative,
+                "trades": row["trades"],
+                "wins": row["wins"],
+            }
+        )
 
-    return {
-        "period_days": days,
-        "total_pnl": cumulative,
-        "data": data
-    }
+    return {"period_days": days, "total_pnl": cumulative, "data": data}
 
 
 @app.get("/api/charts/r-score-distribution")
-async def get_rscore_distribution(days: int = Query(30, ge=1, le=365)) -> Dict[str, Any]:
+async def get_rscore_distribution(
+    days: int = Query(30, ge=1, le=365)
+) -> Dict[str, Any]:
     """Get R-score distribution for histogram charting."""
     db = await get_db()
     period_start = datetime.utcnow() - timedelta(days=days)
@@ -975,7 +1095,7 @@ async def get_rscore_distribution(days: int = Query(30, ge=1, le=365)) -> Dict[s
             "count": v["count"],
             "wins": v["wins"],
             "win_rate": v["wins"] / v["count"] * 100 if v["count"] > 0 else 0,
-            "total_pnl": v["total_pnl"]
+            "total_pnl": v["total_pnl"],
         }
         for k, v in sorted(buckets.items(), key=lambda x: float(x[0]))
     ]
@@ -983,7 +1103,7 @@ async def get_rscore_distribution(days: int = Query(30, ge=1, le=365)) -> Dict[s
     return {
         "period_days": days,
         "total_trades": len(rows),
-        "distribution": distribution
+        "distribution": distribution,
     }
 
 
@@ -1012,29 +1132,32 @@ async def get_daily_activity(days: int = Query(30, ge=1, le=365)) -> Dict[str, A
 
     data = []
     for row in rows:
-        data.append({
-            "date": str(row["date"]),
-            "total_decisions": row["total_decisions"],
-            "buy_yes": row["buy_yes_count"],
-            "buy_no": row["buy_no_count"],
-            "skipped": row["skip_count"],
-            "total_wagered": float(row["total_wagered"]) if row["total_wagered"] else 0,
-            "avg_confidence": float(row["avg_confidence"]) if row["avg_confidence"] else 0,
-            "avg_r_score": float(row["avg_r_score"]) if row["avg_r_score"] else 0
-        })
+        data.append(
+            {
+                "date": str(row["date"]),
+                "total_decisions": row["total_decisions"],
+                "buy_yes": row["buy_yes_count"],
+                "buy_no": row["buy_no_count"],
+                "skipped": row["skip_count"],
+                "total_wagered": (
+                    float(row["total_wagered"]) if row["total_wagered"] else 0
+                ),
+                "avg_confidence": (
+                    float(row["avg_confidence"]) if row["avg_confidence"] else 0
+                ),
+                "avg_r_score": float(row["avg_r_score"]) if row["avg_r_score"] else 0,
+            }
+        )
 
-    return {
-        "period_days": days,
-        "data": data
-    }
+    return {"period_days": days, "data": data}
 
 
 # === Run History Endpoint ===
 
+
 @app.get("/api/runs")
 async def get_run_history(
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100)
+    page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100)
 ) -> Dict[str, Any]:
     """Get bot run history with pagination."""
     db = await get_db()
@@ -1068,33 +1191,41 @@ async def get_run_history(
             except Exception:
                 pass
 
-        runs.append({
-            "run_id": row["run_id"],
-            "started_at": str(started) if started else None,
-            "completed_at": str(completed) if completed else None,
-            "duration_seconds": duration,
-            "mode": row["mode"],
-            "environment": row["environment"],
-            "status": row["status"],
-            "events_analyzed": row["events_analyzed"],
-            "markets_analyzed": row["markets_analyzed"],
-            "decisions_made": row["decisions_made"],
-            "bets_placed": row["bets_placed"],
-            "total_wagered": float(row["total_wagered"]) if row["total_wagered"] else 0,
-            "config": {
-                "max_events": row["max_events"],
-                "z_threshold": float(row["z_threshold"]) if row["z_threshold"] else None,
-                "kelly_fraction": float(row["kelly_fraction"]) if row["kelly_fraction"] else None
-            },
-            "error_message": row["error_message"]
-        })
+        runs.append(
+            {
+                "run_id": row["run_id"],
+                "started_at": str(started) if started else None,
+                "completed_at": str(completed) if completed else None,
+                "duration_seconds": duration,
+                "mode": row["mode"],
+                "environment": row["environment"],
+                "status": row["status"],
+                "events_analyzed": row["events_analyzed"],
+                "markets_analyzed": row["markets_analyzed"],
+                "decisions_made": row["decisions_made"],
+                "bets_placed": row["bets_placed"],
+                "total_wagered": (
+                    float(row["total_wagered"]) if row["total_wagered"] else 0
+                ),
+                "config": {
+                    "max_events": row["max_events"],
+                    "z_threshold": (
+                        float(row["z_threshold"]) if row["z_threshold"] else None
+                    ),
+                    "kelly_fraction": (
+                        float(row["kelly_fraction"]) if row["kelly_fraction"] else None
+                    ),
+                },
+                "error_message": row["error_message"],
+            }
+        )
 
     return {
         "runs": runs,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page if per_page > 0 else 1
+        "pages": (total + per_page - 1) // per_page if per_page > 0 else 1,
     }
 
 
@@ -1190,33 +1321,50 @@ async def get_live_positions() -> PositionSummary:
                 sl_pct = row.get("stop_loss_pct") or 0.15
                 tp_pct = row.get("take_profit_pct") or 0.30
 
-                positions.append({
-                    "decision_id": row["decision_id"],
-                    "ticker": row["market_ticker"],
-                    "side": "yes" if row["action"] == "buy_yes" else "no",
-                    "contracts": row.get("filled_contracts") or 0,
-                    "entry_price": entry_price,
-                    "current_price": row.get("current_price_cents") or entry_price,
-                    "pnl_dollars": round(pnl, 2),
-                    "pnl_pct": round(float(row.get("unrealized_pnl_pct") or 0) * 100, 2),
-                    "stop_loss_pct": sl_pct,
-                    "take_profit_pct": tp_pct,
-                    "stop_loss_price": int(entry_price * (1 - sl_pct)),
-                    "take_profit_price": int(entry_price * (1 + tp_pct)),
-                    "trailing_stop_price": None,
-                    "high_water_mark": row.get("high_water_mark_cents") or entry_price,
-                    "is_active": True,
-                    "exit_pending": False,
-                    "last_update": str(row.get("last_price_update")) if row.get("last_price_update") else None,
-                })
+                positions.append(
+                    {
+                        "decision_id": row["decision_id"],
+                        "ticker": row["market_ticker"],
+                        "side": "yes" if row["action"] == "buy_yes" else "no",
+                        "contracts": row.get("filled_contracts") or 0,
+                        "entry_price": entry_price,
+                        "current_price": row.get("current_price_cents") or entry_price,
+                        "pnl_dollars": round(pnl, 2),
+                        "pnl_pct": round(
+                            float(row.get("unrealized_pnl_pct") or 0) * 100, 2
+                        ),
+                        "stop_loss_pct": sl_pct,
+                        "take_profit_pct": tp_pct,
+                        "stop_loss_price": int(entry_price * (1 - sl_pct)),
+                        "take_profit_price": int(entry_price * (1 + tp_pct)),
+                        "trailing_stop_price": None,
+                        "high_water_mark": row.get("high_water_mark_cents")
+                        or entry_price,
+                        "is_active": True,
+                        "exit_pending": False,
+                        "last_update": (
+                            str(row.get("last_price_update"))
+                            if row.get("last_price_update")
+                            else None
+                        ),
+                    }
+                )
 
             return PositionSummary(
                 count=len(positions),
                 total_unrealized_pnl=round(total_pnl, 2),
-                total_value=sum(p.get("contracts", 0) * p.get("current_price", 0) / 100 for p in positions),
+                total_value=sum(
+                    p.get("contracts", 0) * p.get("current_price", 0) / 100
+                    for p in positions
+                ),
                 monitor_running=False,
-                stats={"checks": 0, "triggers": 0, "successful_exits": 0, "failed_exits": 0},
-                positions=positions
+                stats={
+                    "checks": 0,
+                    "triggers": 0,
+                    "successful_exits": 0,
+                    "failed_exits": 0,
+                },
+                positions=positions,
             )
 
         except Exception as e:
@@ -1226,7 +1374,7 @@ async def get_live_positions() -> PositionSummary:
                 total_value=0,
                 monitor_running=False,
                 stats={"error": str(e)},
-                positions=[]
+                positions=[],
             )
 
     # Monitor is running - get live data
@@ -1237,12 +1385,14 @@ async def get_live_positions() -> PositionSummary:
         total_value=summary["total_value"],
         monitor_running=True,
         stats=summary["stats"],
-        positions=summary["positions"]
+        positions=summary["positions"],
     )
 
 
 @app.get("/api/positions/near-triggers")
-async def get_positions_near_triggers(threshold_pct: float = Query(0.05, ge=0.01, le=0.20)) -> Dict[str, Any]:
+async def get_positions_near_triggers(
+    threshold_pct: float = Query(0.05, ge=0.01, le=0.20)
+) -> Dict[str, Any]:
     """
     Get positions that are near stop-loss or take-profit triggers.
 
@@ -1258,14 +1408,13 @@ async def get_positions_near_triggers(threshold_pct: float = Query(0.05, ge=0.01
         "count": len(near_positions),
         "threshold_pct": threshold_pct,
         "monitor_running": True,
-        "positions": [p.to_dict() for p in near_positions]
+        "positions": [p.to_dict() for p in near_positions],
     }
 
 
 @app.get("/api/positions/exits")
 async def get_exit_history(
-    days: int = Query(7, ge=1, le=90),
-    exit_reason: Optional[str] = None
+    days: int = Query(7, ge=1, le=90), exit_reason: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Get history of position exits (stop-loss, take-profit, manual).
@@ -1305,18 +1454,24 @@ async def get_exit_history(
 
     exits = []
     for row in rows:
-        exits.append({
-            "decision_id": row["decision_id"],
-            "ticker": row["market_ticker"],
-            "side": "yes" if row["action"] == "buy_yes" else "no",
-            "entry_price": row.get("filled_price_cents"),
-            "exit_price": row.get("exit_price_cents"),
-            "contracts": row.get("exit_contracts"),
-            "exit_reason": row.get("exit_reason"),
-            "pnl_dollars": float(row["exit_pnl_dollars"]) if row.get("exit_pnl_dollars") else 0,
-            "exit_timestamp": str(row["exit_timestamp"]) if row.get("exit_timestamp") else None,
-            "order_id": row.get("exit_order_id")
-        })
+        exits.append(
+            {
+                "decision_id": row["decision_id"],
+                "ticker": row["market_ticker"],
+                "side": "yes" if row["action"] == "buy_yes" else "no",
+                "entry_price": row.get("filled_price_cents"),
+                "exit_price": row.get("exit_price_cents"),
+                "contracts": row.get("exit_contracts"),
+                "exit_reason": row.get("exit_reason"),
+                "pnl_dollars": (
+                    float(row["exit_pnl_dollars"]) if row.get("exit_pnl_dollars") else 0
+                ),
+                "exit_timestamp": (
+                    str(row["exit_timestamp"]) if row.get("exit_timestamp") else None
+                ),
+                "order_id": row.get("exit_order_id"),
+            }
+        )
 
     # Summary by exit reason
     summary_query = """
@@ -1335,10 +1490,13 @@ async def get_exit_history(
         summary = {
             row["exit_reason"]: {
                 "count": row["count"],
-                "total_pnl": round(float(row["total_pnl"]) if row["total_pnl"] else 0, 2),
-                "avg_pnl": round(float(row["avg_pnl"]) if row["avg_pnl"] else 0, 2)
+                "total_pnl": round(
+                    float(row["total_pnl"]) if row["total_pnl"] else 0, 2
+                ),
+                "avg_pnl": round(float(row["avg_pnl"]) if row["avg_pnl"] else 0, 2),
             }
-            for row in summary_rows if row.get("exit_reason")
+            for row in summary_rows
+            if row.get("exit_reason")
         }
     except Exception:
         summary = {}
@@ -1348,7 +1506,7 @@ async def get_exit_history(
         "exit_reason_filter": exit_reason,
         "count": len(exits),
         "exits": exits,
-        "summary_by_reason": summary
+        "summary_by_reason": summary,
     }
 
 
@@ -1361,19 +1519,20 @@ async def liquidate_all_positions() -> Dict[str, Any]:
     """
     if _kalshi_client is None:
         raise HTTPException(
-            status_code=503,
-            detail="Kalshi client not available. Bot must be running."
+            status_code=503, detail="Kalshi client not available. Bot must be running."
         )
 
     result = await _kalshi_client.liquidate_all_positions()
 
     # Broadcast alert
-    await manager.broadcast_alert({
-        "type": "emergency_liquidation",
-        "message": f"Emergency liquidation: {len(result.get('liquidated', []))} positions closed",
-        "severity": "critical",
-        "result": result
-    })
+    await manager.broadcast_alert(
+        {
+            "type": "emergency_liquidation",
+            "message": f"Emergency liquidation: {len(result.get('liquidated', []))} positions closed",
+            "severity": "critical",
+            "result": result,
+        }
+    )
 
     return result
 
@@ -1403,8 +1562,7 @@ async def get_position_detail(decision_id: str) -> Dict[str, Any]:
 
 @app.put("/api/positions/{decision_id}/triggers")
 async def update_position_triggers(
-    decision_id: str,
-    request: TriggerUpdateRequest
+    decision_id: str, request: TriggerUpdateRequest
 ) -> Dict[str, Any]:
     """
     Update stop-loss/take-profit triggers for a position.
@@ -1418,17 +1576,19 @@ async def update_position_triggers(
             decision_id,
             stop_loss_pct=request.stop_loss_pct,
             take_profit_pct=request.take_profit_pct,
-            trailing_stop_pct=request.trailing_stop_pct
+            trailing_stop_pct=request.trailing_stop_pct,
         )
 
         if success:
             position = _position_monitor.get_position(decision_id)
             return {
                 "success": True,
-                "position": position.to_dict() if position else None
+                "position": position.to_dict() if position else None,
             }
         else:
-            raise HTTPException(status_code=404, detail="Position not found or not monitored")
+            raise HTTPException(
+                status_code=404, detail="Position not found or not monitored"
+            )
 
     # Fallback: update directly in database
     db = await get_db()
@@ -1473,7 +1633,7 @@ async def update_position_triggers(
             "decision_id": row["decision_id"],
             "stop_loss_pct": row["stop_loss_pct"],
             "take_profit_pct": row["take_profit_pct"],
-            "trailing_stop_pct": row["trailing_stop_pct"]
+            "trailing_stop_pct": row["trailing_stop_pct"],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1489,20 +1649,21 @@ async def liquidate_position(ticker: str) -> Dict[str, Any]:
     """
     if _kalshi_client is None:
         raise HTTPException(
-            status_code=503,
-            detail="Kalshi client not available. Bot must be running."
+            status_code=503, detail="Kalshi client not available. Bot must be running."
         )
 
     result = await _kalshi_client.liquidate_position(ticker)
 
     # Broadcast alert
     if result.get("success"):
-        await manager.broadcast_alert({
-            "type": "liquidation",
-            "ticker": ticker,
-            "message": f"Position liquidated: {ticker}",
-            "severity": "warning"
-        })
+        await manager.broadcast_alert(
+            {
+                "type": "liquidation",
+                "ticker": ticker,
+                "message": f"Position liquidated: {ticker}",
+                "severity": "warning",
+            }
+        )
 
     return result
 
@@ -1515,7 +1676,7 @@ async def broadcast_position_update(position: Dict[str, Any]) -> Dict[str, Any]:
     """
     message = WebSocketMessage(
         type=MessageType.STATUS,  # Reuse STATUS for positions
-        data={"position_update": position}
+        data={"position_update": position},
     )
     sent = await manager.broadcast(message)
     return {"sent_to": sent, "message": "Position update broadcast"}
@@ -1527,18 +1688,23 @@ async def broadcast_trigger_alert(trigger: Dict[str, Any]) -> Dict[str, Any]:
     Broadcast a trigger alert to all WebSocket subscribers.
     Called when stop-loss or take-profit triggers.
     """
-    await manager.broadcast_alert({
-        "type": "trigger",
-        "trigger_type": trigger.get("trigger_type"),
-        "ticker": trigger.get("ticker"),
-        "pnl_dollars": trigger.get("pnl_dollars"),
-        "message": f"{trigger.get('trigger_type', 'TRIGGER').upper()}: {trigger.get('ticker')} "
-                   f"(P&L: ${trigger.get('pnl_dollars', 0):.2f})",
-        "severity": "warning" if trigger.get("trigger_type") == "stop_loss" else "info"
-    })
+    await manager.broadcast_alert(
+        {
+            "type": "trigger",
+            "trigger_type": trigger.get("trigger_type"),
+            "ticker": trigger.get("ticker"),
+            "pnl_dollars": trigger.get("pnl_dollars"),
+            "message": f"{trigger.get('trigger_type', 'TRIGGER').upper()}: {trigger.get('ticker')} "
+            f"(P&L: ${trigger.get('pnl_dollars', 0):.2f})",
+            "severity": (
+                "warning" if trigger.get("trigger_type") == "stop_loss" else "info"
+            ),
+        }
+    )
     return {"success": True, "message": "Trigger alert broadcast"}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

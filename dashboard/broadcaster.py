@@ -13,9 +13,11 @@ Usage in trading_bot.py:
     # On important events
     await broadcast_alert("Daily loss limit reached!", severity="critical")
 """
+
 import os
+from typing import Any, Dict, Optional
+
 import httpx
-from typing import Dict, Any, Optional
 from loguru import logger
 
 # Dashboard API URL - configurable via environment variable for Render deployment
@@ -23,7 +25,9 @@ from loguru import logger
 DASHBOARD_API_URL = os.getenv("DASHBOARD_URL", "http://localhost:8000")
 
 
-async def broadcast_decision(decision: Dict[str, Any], base_url: str = DASHBOARD_API_URL) -> bool:
+async def broadcast_decision(
+    decision: Dict[str, Any], base_url: str = DASHBOARD_API_URL
+) -> bool:
     """
     Broadcast a new betting decision to all connected dashboard clients.
 
@@ -37,12 +41,13 @@ async def broadcast_decision(decision: Dict[str, Any], base_url: str = DASHBOARD
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/decision",
-                json=decision
+                f"{base_url}/api/broadcast/decision", json=decision
             )
             if response.status_code == 200:
                 result = response.json()
-                logger.debug(f"Decision broadcast to {result.get('sent_to', 0)} clients")
+                logger.debug(
+                    f"Decision broadcast to {result.get('sent_to', 0)} clients"
+                )
                 return True
             else:
                 logger.warning(f"Decision broadcast failed: {response.status_code}")
@@ -87,7 +92,7 @@ async def broadcast_alert(
     message: str,
     severity: str = "info",
     details: Optional[Dict[str, Any]] = None,
-    base_url: str = DASHBOARD_API_URL
+    base_url: str = DASHBOARD_API_URL,
 ) -> bool:
     """
     Broadcast an alert to all connected dashboard clients.
@@ -101,17 +106,12 @@ async def broadcast_alert(
     Returns:
         True if broadcast succeeded, False otherwise
     """
-    alert_data = {
-        "message": message,
-        "severity": severity,
-        "details": details or {}
-    }
+    alert_data = {"message": message, "severity": severity, "details": details or {}}
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/alert",
-                json=alert_data
+                f"{base_url}/api/broadcast/alert", json=alert_data
             )
             if response.status_code == 200:
                 result = response.json()
@@ -132,7 +132,7 @@ async def broadcast_status(
     bot_running: bool,
     mode: str = "dry_run",
     additional_info: Optional[Dict[str, Any]] = None,
-    base_url: str = DASHBOARD_API_URL
+    base_url: str = DASHBOARD_API_URL,
 ) -> bool:
     """
     Broadcast bot status update to all connected clients.
@@ -146,17 +146,12 @@ async def broadcast_status(
     Returns:
         True if broadcast succeeded, False otherwise
     """
-    status_data = {
-        "bot_running": bot_running,
-        "mode": mode,
-        **(additional_info or {})
-    }
+    status_data = {"bot_running": bot_running, "mode": mode, **(additional_info or {})}
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/status",
-                json=status_data
+                f"{base_url}/api/broadcast/status", json=status_data
             )
             if response.status_code == 200:
                 result = response.json()
@@ -179,7 +174,7 @@ async def broadcast_workflow_step(
     status: str = "running",
     description: str = "",
     details: Optional[Dict[str, Any]] = None,
-    base_url: str = DASHBOARD_API_URL
+    base_url: str = DASHBOARD_API_URL,
 ) -> bool:
     """
     Broadcast a workflow step update to the dashboard.
@@ -205,14 +200,13 @@ async def broadcast_workflow_step(
         "status": status,
         "description": description,
         "details": details or {},
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/workflow",
-                json=step_data
+                f"{base_url}/api/broadcast/workflow", json=step_data
             )
             if response.status_code == 200:
                 logger.debug(f"Workflow step {step_number} ({step_name}) broadcast")
@@ -233,7 +227,7 @@ async def broadcast_cli_log(
     message: str,
     source: str = "bot",
     details: Optional[Dict[str, Any]] = None,
-    base_url: str = DASHBOARD_API_URL
+    base_url: str = DASHBOARD_API_URL,
 ) -> bool:
     """
     Broadcast a CLI log entry to the dashboard.
@@ -255,14 +249,13 @@ async def broadcast_cli_log(
         "message": message,
         "source": source,
         "details": details or {},
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/cli_log",
-                json=log_data
+                f"{base_url}/api/broadcast/cli_log", json=log_data
             )
             if response.status_code == 200:
                 return True
@@ -275,8 +268,7 @@ async def broadcast_cli_log(
 
 
 async def broadcast_account_update(
-    account_data: Dict[str, Any],
-    base_url: str = DASHBOARD_API_URL
+    account_data: Dict[str, Any], base_url: str = DASHBOARD_API_URL
 ) -> bool:
     """
     Broadcast real Kalshi account data to the dashboard.
@@ -291,8 +283,7 @@ async def broadcast_account_update(
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.post(
-                f"{base_url}/api/broadcast/account",
-                json=account_data
+                f"{base_url}/api/broadcast/account", json=account_data
             )
             if response.status_code == 200:
                 return True
@@ -331,7 +322,7 @@ class DashboardBroadcaster:
                 await broadcast_alert(
                     f"Bot stopped with error: {exc_val}",
                     severity="error",
-                    base_url=self.base_url
+                    base_url=self.base_url,
                 )
             await broadcast_status(bot_running=False, base_url=self.base_url)
             await broadcast_kpi_update(base_url=self.base_url)
@@ -349,10 +340,17 @@ class DashboardBroadcaster:
             return False
         return await broadcast_kpi_update(base_url=self.base_url)
 
-    async def alert(self, message: str, severity: str = "info", details: Optional[Dict[str, Any]] = None) -> bool:
+    async def alert(
+        self,
+        message: str,
+        severity: str = "info",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         if not self.enabled:
             return False
-        result = await broadcast_alert(message, severity, details, base_url=self.base_url)
+        result = await broadcast_alert(
+            message, severity, details, base_url=self.base_url
+        )
         if result:
             self.alerts_sent += 1
         return result
@@ -362,8 +360,16 @@ class DashboardBroadcaster:
             return False
         return await broadcast_status(bot_running, mode, kwargs, base_url=self.base_url)
 
-    async def workflow(self, step_number: int, step_name: str, status: str = "running",
-                       description: str = "", details: Optional[Dict[str, Any]] = None) -> bool:
+    async def workflow(
+        self,
+        step_number: int,
+        step_name: str,
+        status: str = "running",
+        description: str = "",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         if not self.enabled:
             return False
-        return await broadcast_workflow_step(step_number, step_name, status, description, details, base_url=self.base_url)
+        return await broadcast_workflow_step(
+            step_number, step_name, status, description, details, base_url=self.base_url
+        )

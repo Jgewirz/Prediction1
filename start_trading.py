@@ -2,12 +2,13 @@
 Startup orchestrator for Kalshi Trading Bot with TrendRadar integration.
 Starts TrendRadar MCP server and then runs the trading bot.
 """
-import subprocess
-import sys
-import time
+
 import asyncio
 import os
 import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 # Paths
@@ -28,10 +29,7 @@ def find_python():
     for candidate in candidates:
         try:
             result = subprocess.run(
-                [candidate, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                [candidate, "--version"], capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
                 return candidate
@@ -51,9 +49,13 @@ def start_trendradar(python_exe: str):
 
     # Start TrendRadar in HTTP mode
     cmd = [
-        python_exe, "-m", "mcp_server.server",
-        "--transport", "http",
-        "--port", "3333"
+        python_exe,
+        "-m",
+        "mcp_server.server",
+        "--transport",
+        "http",
+        "--port",
+        "3333",
     ]
 
     try:
@@ -63,7 +65,7 @@ def start_trendradar(python_exe: str):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
         return process
     except Exception as e:
@@ -106,10 +108,7 @@ def run_trading_bot(python_exe: str, args: list):
     cmd = [python_exe, "trading_bot.py"] + args
 
     process = subprocess.Popen(
-        cmd,
-        cwd=str(BOT_DIR),
-        stdout=sys.stdout,
-        stderr=sys.stderr
+        cmd, cwd=str(BOT_DIR), stdout=sys.stdout, stderr=sys.stderr
     )
 
     return process
@@ -128,14 +127,22 @@ Examples:
   python start_trading.py --live              # Live trading with TrendRadar
   python start_trading.py --no-trendradar     # Run without TrendRadar
   python start_trading.py --max-expiration-hours 6 --live
-"""
+""",
     )
     parser.add_argument("--live", action="store_true", help="Enable live trading")
-    parser.add_argument("--no-trendradar", action="store_true", help="Skip TrendRadar startup")
-    parser.add_argument("--max-expiration-hours", type=int, help="Max expiration filter in hours")
-    parser.add_argument("--reconcile", action="store_true", help="Run reconciliation only")
+    parser.add_argument(
+        "--no-trendradar", action="store_true", help="Skip TrendRadar startup"
+    )
+    parser.add_argument(
+        "--max-expiration-hours", type=int, help="Max expiration filter in hours"
+    )
+    parser.add_argument(
+        "--reconcile", action="store_true", help="Run reconciliation only"
+    )
     parser.add_argument("--stats", action="store_true", help="Show statistics only")
-    parser.add_argument("--migrate", action="store_true", help="Run database migration only")
+    parser.add_argument(
+        "--migrate", action="store_true", help="Run database migration only"
+    )
 
     args = parser.parse_args()
 

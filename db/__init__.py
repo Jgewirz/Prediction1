@@ -5,7 +5,8 @@ Provides SQLite and PostgreSQL storage for betting decisions, outcomes, and perf
 """
 
 from .database import Database, get_database
-from .postgres import PostgresDatabase, get_postgres_database, close_postgres_database
+from .postgres import (PostgresDatabase, close_postgres_database,
+                       get_postgres_database)
 from .queries import Queries
 
 __all__ = [
@@ -14,5 +15,5 @@ __all__ = [
     "PostgresDatabase",
     "get_postgres_database",
     "close_postgres_database",
-    "Queries"
+    "Queries",
 ]

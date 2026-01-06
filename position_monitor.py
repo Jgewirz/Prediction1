@@ -14,8 +14,9 @@ Usage:
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Callable, Any
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
+
 from loguru import logger
 
 try:
@@ -28,6 +29,7 @@ except ImportError:
 
 class TriggerType(Enum):
     """Types of exit triggers."""
+
     STOP_LOSS = "stop_loss"
     TAKE_PROFIT = "take_profit"
     TRAILING_STOP = "trailing_stop"
@@ -38,29 +40,30 @@ class TriggerType(Enum):
 @dataclass
 class StopLossConfig:
     """Stop-loss and take-profit configuration."""
+
     enabled: bool = True
 
     # Default thresholds (can be overridden per-position)
-    default_stop_loss_pct: float = 0.15      # Exit if down 15%
-    default_take_profit_pct: float = 0.30    # Exit if up 30%
+    default_stop_loss_pct: float = 0.15  # Exit if down 15%
+    default_take_profit_pct: float = 0.30  # Exit if up 30%
 
     # Trailing stop (optional)
     trailing_stop_enabled: bool = False
-    trailing_stop_pct: float = 0.10          # Trail 10% below high water mark
+    trailing_stop_pct: float = 0.10  # Trail 10% below high water mark
 
     # Monitoring settings
-    monitor_interval_seconds: int = 30       # Check positions every 30s
-    price_staleness_seconds: int = 60        # Re-fetch if price older than 60s
+    monitor_interval_seconds: int = 30  # Check positions every 30s
+    price_staleness_seconds: int = 60  # Re-fetch if price older than 60s
 
     # Execution settings
-    use_market_orders: bool = False          # True = market order, False = limit at bid
-    slippage_tolerance_pct: float = 0.02     # 2% slippage tolerance for limits
+    use_market_orders: bool = False  # True = market order, False = limit at bid
+    slippage_tolerance_pct: float = 0.02  # 2% slippage tolerance for limits
     retry_failed_exits: bool = True
     max_exit_retries: int = 3
 
     # Risk controls
-    max_simultaneous_exits: int = 5          # Don't exit more than 5 at once
-    min_position_age_seconds: int = 300      # Don't exit positions < 5 min old
+    max_simultaneous_exits: int = 5  # Don't exit more than 5 at once
+    min_position_age_seconds: int = 300  # Don't exit positions < 5 min old
 
     # Notifications
     alert_on_trigger: bool = True
@@ -70,6 +73,7 @@ class StopLossConfig:
 @dataclass
 class PositionState:
     """Current state of a monitored position."""
+
     decision_id: str
     market_ticker: str
     side: str  # "yes" or "no"
@@ -111,7 +115,8 @@ class PositionState:
         self.unrealized_pnl_dollars = current_value - entry_value
         self.unrealized_pnl_pct = (
             (self.current_price_cents - self.entry_price_cents) / self.entry_price_cents
-            if self.entry_price_cents > 0 else 0.0
+            if self.entry_price_cents > 0
+            else 0.0
         )
 
         # Update high water mark for trailing stops
@@ -174,6 +179,7 @@ class PositionState:
 @dataclass
 class TriggerEvent:
     """Event fired when a trigger is hit."""
+
     position: PositionState
     trigger_type: TriggerType
     trigger_price_cents: int
@@ -320,28 +326,31 @@ class PositionMonitor:
             rows = []
 
         for row in rows:
-            side = "yes" if row['action'] == 'buy_yes' else "no"
-            entry_price = row.get('filled_price_cents') or 0
-            entry_contracts = row.get('filled_contracts') or 0
+            side = "yes" if row["action"] == "buy_yes" else "no"
+            entry_price = row.get("filled_price_cents") or 0
+            entry_contracts = row.get("filled_contracts") or 0
 
             position = PositionState(
-                decision_id=row['decision_id'],
-                market_ticker=row['market_ticker'],
+                decision_id=row["decision_id"],
+                market_ticker=row["market_ticker"],
                 side=side,
                 entry_price_cents=entry_price,
                 entry_contracts=entry_contracts,
-                entry_timestamp=row.get('filled_timestamp') or datetime.now(timezone.utc),
-                entry_cost_dollars=row.get('fill_cost_dollars') or 0,
-                current_price_cents=row.get('current_price_cents') or entry_price,
+                entry_timestamp=row.get("filled_timestamp")
+                or datetime.now(timezone.utc),
+                entry_cost_dollars=row.get("fill_cost_dollars") or 0,
+                current_price_cents=row.get("current_price_cents") or entry_price,
                 current_contracts=entry_contracts,
                 last_update=datetime.now(timezone.utc),
-                stop_loss_pct=row.get('stop_loss_pct') or self.sl_config.default_stop_loss_pct,
-                take_profit_pct=row.get('take_profit_pct') or self.sl_config.default_take_profit_pct,
-                trailing_stop_pct=row.get('trailing_stop_pct'),
-                high_water_mark_cents=row.get('high_water_mark_cents') or entry_price,
+                stop_loss_pct=row.get("stop_loss_pct")
+                or self.sl_config.default_stop_loss_pct,
+                take_profit_pct=row.get("take_profit_pct")
+                or self.sl_config.default_take_profit_pct,
+                trailing_stop_pct=row.get("trailing_stop_pct"),
+                high_water_mark_cents=row.get("high_water_mark_cents") or entry_price,
             )
 
-            self._positions[row['decision_id']] = position
+            self._positions[row["decision_id"]] = position
 
         logger.info(f"Loaded {len(self._positions)} open positions for monitoring")
 
@@ -427,7 +436,9 @@ class PositionMonitor:
 
         # Check minimum position age
         if position.entry_timestamp:
-            age = (datetime.now(timezone.utc) - position.entry_timestamp).total_seconds()
+            age = (
+                datetime.now(timezone.utc) - position.entry_timestamp
+            ).total_seconds()
             if age < self.sl_config.min_position_age_seconds:
                 return None
 
@@ -440,7 +451,7 @@ class PositionMonitor:
             return TriggerEvent(
                 position=position,
                 trigger_type=TriggerType.STOP_LOSS,
-                trigger_price_cents=position.current_price_cents
+                trigger_price_cents=position.current_price_cents,
             )
 
         if position.check_trailing_stop():
@@ -451,7 +462,7 @@ class PositionMonitor:
             return TriggerEvent(
                 position=position,
                 trigger_type=TriggerType.TRAILING_STOP,
-                trigger_price_cents=position.current_price_cents
+                trigger_price_cents=position.current_price_cents,
             )
 
         if position.check_take_profit():
@@ -462,7 +473,7 @@ class PositionMonitor:
             return TriggerEvent(
                 position=position,
                 trigger_type=TriggerType.TAKE_PROFIT,
-                trigger_price_cents=position.current_price_cents
+                trigger_price_cents=position.current_price_cents,
             )
 
         # Check for near-trigger alerts
@@ -495,7 +506,9 @@ class PositionMonitor:
         position.exit_pending = True
 
         retries = 0
-        max_retries = self.sl_config.max_exit_retries if self.sl_config.retry_failed_exits else 1
+        max_retries = (
+            self.sl_config.max_exit_retries if self.sl_config.retry_failed_exits else 1
+        )
 
         while retries < max_retries:
             try:
@@ -505,7 +518,10 @@ class PositionMonitor:
                     order_type = "market"
                 else:
                     # Use current bid with slippage tolerance
-                    slippage = int(position.current_price_cents * self.sl_config.slippage_tolerance_pct)
+                    slippage = int(
+                        position.current_price_cents
+                        * self.sl_config.slippage_tolerance_pct
+                    )
                     price_cents = max(1, position.current_price_cents - slippage)
                     order_type = "limit"
 
@@ -515,7 +531,7 @@ class PositionMonitor:
                     side=position.side,
                     contracts=position.current_contracts,
                     price_cents=price_cents,
-                    order_type=order_type
+                    order_type=order_type,
                 )
 
                 if result.get("success"):
@@ -542,7 +558,9 @@ class PositionMonitor:
                     )
                     return True
                 else:
-                    logger.error(f"Exit failed (attempt {retries + 1}): {result.get('error')}")
+                    logger.error(
+                        f"Exit failed (attempt {retries + 1}): {result.get('error')}"
+                    )
                     retries += 1
 
             except Exception as e:
@@ -550,19 +568,18 @@ class PositionMonitor:
                 retries += 1
 
             if retries < max_retries:
-                await asyncio.sleep(2 ** retries)  # Exponential backoff
+                await asyncio.sleep(2**retries)  # Exponential backoff
 
         # All retries failed
         self._stats["failed_exits"] += 1
         position.exit_pending = False
-        logger.error(f"Failed to exit {position.market_ticker} after {max_retries} attempts")
+        logger.error(
+            f"Failed to exit {position.market_ticker} after {max_retries} attempts"
+        )
         return False
 
     async def _record_exit(
-        self,
-        position: PositionState,
-        trigger: TriggerEvent,
-        result: Dict
+        self, position: PositionState, trigger: TriggerEvent, result: Dict
     ) -> None:
         """Record the exit in the database."""
         try:
@@ -585,7 +602,7 @@ class PositionMonitor:
                 datetime.now(timezone.utc),
                 trigger.trigger_type.value,
                 position.unrealized_pnl_dollars,
-                position.decision_id
+                position.decision_id,
             )
 
             # Record exit event
@@ -608,7 +625,7 @@ class PositionMonitor:
                 position.unrealized_pnl_dollars,
                 position.unrealized_pnl_pct,
                 result.get("order_id"),
-                "pending"
+                "pending",
             )
         except Exception as e:
             logger.error(f"Error recording exit: {e}")
@@ -632,7 +649,7 @@ class PositionMonitor:
                     position.unrealized_pnl_pct,
                     position.high_water_mark_cents,
                     datetime.now(timezone.utc),
-                    position.decision_id
+                    position.decision_id,
                 )
             except Exception as e:
                 logger.error(f"Error updating position {position.decision_id}: {e}")
@@ -661,24 +678,27 @@ class PositionMonitor:
                 logger.error(f"Decision {decision_id} not found")
                 return False
 
-            side = "yes" if row['action'] == 'buy_yes' else "no"
-            entry_price = row.get('filled_price_cents') or 0
+            side = "yes" if row["action"] == "buy_yes" else "no"
+            entry_price = row.get("filled_price_cents") or 0
 
             position = PositionState(
-                decision_id=row['decision_id'],
-                market_ticker=row['market_ticker'],
+                decision_id=row["decision_id"],
+                market_ticker=row["market_ticker"],
                 side=side,
                 entry_price_cents=entry_price,
-                entry_contracts=row.get('filled_contracts') or 0,
-                entry_timestamp=row.get('filled_timestamp') or datetime.now(timezone.utc),
-                entry_cost_dollars=row.get('fill_cost_dollars') or 0,
+                entry_contracts=row.get("filled_contracts") or 0,
+                entry_timestamp=row.get("filled_timestamp")
+                or datetime.now(timezone.utc),
+                entry_cost_dollars=row.get("fill_cost_dollars") or 0,
                 current_price_cents=entry_price,
-                current_contracts=row.get('filled_contracts') or 0,
+                current_contracts=row.get("filled_contracts") or 0,
                 last_update=datetime.now(timezone.utc),
-                stop_loss_pct=row.get('stop_loss_pct') or self.sl_config.default_stop_loss_pct,
-                take_profit_pct=row.get('take_profit_pct') or self.sl_config.default_take_profit_pct,
-                trailing_stop_pct=row.get('trailing_stop_pct'),
-                high_water_mark_cents=row.get('high_water_mark_cents') or entry_price,
+                stop_loss_pct=row.get("stop_loss_pct")
+                or self.sl_config.default_stop_loss_pct,
+                take_profit_pct=row.get("take_profit_pct")
+                or self.sl_config.default_take_profit_pct,
+                trailing_stop_pct=row.get("trailing_stop_pct"),
+                high_water_mark_cents=row.get("high_water_mark_cents") or entry_price,
             )
 
             self._positions[decision_id] = position
@@ -702,7 +722,7 @@ class PositionMonitor:
         decision_id: str,
         stop_loss_pct: Optional[float] = None,
         take_profit_pct: Optional[float] = None,
-        trailing_stop_pct: Optional[float] = None
+        trailing_stop_pct: Optional[float] = None,
     ) -> bool:
         """Update trigger levels for a position."""
         if decision_id not in self._positions:
@@ -729,9 +749,11 @@ class PositionMonitor:
                 position.stop_loss_pct,
                 position.take_profit_pct,
                 position.trailing_stop_pct,
-                decision_id
+                decision_id,
             )
-            logger.info(f"Updated triggers for {decision_id}: SL={stop_loss_pct}, TP={take_profit_pct}")
+            logger.info(
+                f"Updated triggers for {decision_id}: SL={stop_loss_pct}, TP={take_profit_pct}"
+            )
             return True
         except Exception as e:
             logger.error(f"Error updating triggers: {e}")
@@ -747,7 +769,7 @@ class PositionMonitor:
         trigger = TriggerEvent(
             position=position,
             trigger_type=TriggerType.MANUAL,
-            trigger_price_cents=position.current_price_cents
+            trigger_price_cents=position.current_price_cents,
         )
 
         return await self._execute_exit(trigger)
@@ -769,14 +791,16 @@ class PositionMonitor:
             "total_unrealized_pnl": round(total_pnl, 2),
             "total_value": round(total_value, 2),
             "stats": self._stats.copy(),
-            "positions": [p.to_dict() for p in self._positions.values()]
+            "positions": [p.to_dict() for p in self._positions.values()],
         }
 
     def get_positions_by_ticker(self, ticker: str) -> List[PositionState]:
         """Get all positions for a specific ticker."""
         return [p for p in self._positions.values() if p.market_ticker == ticker]
 
-    def get_positions_near_trigger(self, threshold_pct: float = 0.05) -> List[PositionState]:
+    def get_positions_near_trigger(
+        self, threshold_pct: float = 0.05
+    ) -> List[PositionState]:
         """Get positions that are near a trigger threshold."""
         near_positions = []
 
@@ -797,26 +821,19 @@ class PositionMonitor:
 
 # === Convenience functions for integration ===
 
+
 async def create_position_monitor(
-    config: BotConfig,
-    kalshi: KalshiClient,
-    db: Any,
-    start_immediately: bool = True
+    config: BotConfig, kalshi: KalshiClient, db: Any, start_immediately: bool = True
 ) -> PositionMonitor:
     """Factory function to create and optionally start a position monitor."""
     sl_config = StopLossConfig(
-        enabled=getattr(config, 'sl_tp_enabled', True),
-        default_stop_loss_pct=getattr(config, 'default_stop_loss_pct', 0.15),
-        default_take_profit_pct=getattr(config, 'default_take_profit_pct', 0.30),
-        monitor_interval_seconds=getattr(config, 'monitor_interval_seconds', 30),
+        enabled=getattr(config, "sl_tp_enabled", True),
+        default_stop_loss_pct=getattr(config, "default_stop_loss_pct", 0.15),
+        default_take_profit_pct=getattr(config, "default_take_profit_pct", 0.30),
+        monitor_interval_seconds=getattr(config, "monitor_interval_seconds", 30),
     )
 
-    monitor = PositionMonitor(
-        config=config,
-        kalshi=kalshi,
-        db=db,
-        sl_config=sl_config
-    )
+    monitor = PositionMonitor(config=config, kalshi=kalshi, db=db, sl_config=sl_config)
 
     if start_immediately:
         await monitor.start()

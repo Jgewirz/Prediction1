@@ -2,15 +2,17 @@
 Authentication module for Kalshi Trading Bot Dashboard.
 Provides JWT-based user authentication with registration and login.
 """
+
 import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr, Field
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -26,8 +28,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=Fals
 
 # === Pydantic Models ===
 
+
 class UserCreate(BaseModel):
     """User registration request."""
+
     email: EmailStr
     password: str = Field(..., min_length=8)
     name: str = Field(..., min_length=2, max_length=100)
@@ -35,12 +39,14 @@ class UserCreate(BaseModel):
 
 class UserLogin(BaseModel):
     """User login request."""
+
     email: EmailStr
     password: str
 
 
 class UserResponse(BaseModel):
     """User response (no password)."""
+
     id: int
     email: str
     name: str
@@ -52,6 +58,7 @@ class UserResponse(BaseModel):
 
 class Token(BaseModel):
     """JWT token response."""
+
     access_token: str
     token_type: str = "bearer"
     expires_in: int
@@ -60,12 +67,14 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     """Decoded token data."""
+
     user_id: int
     email: str
     is_admin: bool = False
 
 
 # === Helper Functions ===
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
@@ -104,6 +113,7 @@ def decode_token(token: str) -> Optional[TokenData]:
 
 
 # === Database Operations ===
+
 
 async def create_user_table(db) -> None:
     """Create users table if it doesn't exist."""
@@ -168,9 +178,9 @@ async def get_user_count(db) -> int:
 
 # === Authentication Dependencies ===
 
+
 async def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),
-    db = None  # Injected by route
+    token: Optional[str] = Depends(oauth2_scheme), db=None  # Injected by route
 ) -> Optional[dict]:
     """Get the current authenticated user from JWT token."""
     if token is None:
@@ -235,8 +245,7 @@ async def register(user_data: UserCreate, db=None):
     existing = await get_user_by_email(db, user_data.email)
     if existing:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
         )
 
     # Create user
@@ -250,14 +259,16 @@ async def register(user_data: UserCreate, db=None):
     return Token(
         access_token=access_token,
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        user=UserResponse(**user)
+        user=UserResponse(**user),
     )
 
 
 @auth_router.post("/login", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=None):
     """Login with email and password."""
-    user = await get_user_by_email(db, form_data.username)  # OAuth2 uses 'username' field
+    user = await get_user_by_email(
+        db, form_data.username
+    )  # OAuth2 uses 'username' field
 
     if not user or not verify_password(form_data.password, user["password_hash"]):
         raise HTTPException(
@@ -268,8 +279,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=None):
 
     if not user.get("is_active", True):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled"
         )
 
     # Update last login
@@ -277,7 +287,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=None):
 
     # Generate token
     access_token = create_access_token(
-        data={"sub": user["id"], "email": user["email"], "is_admin": user.get("is_admin", False)}
+        data={
+            "sub": user["id"],
+            "email": user["email"],
+            "is_admin": user.get("is_admin", False),
+        }
     )
 
     return Token(
@@ -290,8 +304,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db=None):
             is_active=user["is_active"],
             is_admin=user.get("is_admin", False),
             created_at=user["created_at"],
-            last_login=user.get("last_login")
-        )
+            last_login=user.get("last_login"),
+        ),
     )
 
 
@@ -309,7 +323,7 @@ async def get_me(token_data: TokenData = Depends(require_auth), db=None):
         is_active=user["is_active"],
         is_admin=user.get("is_admin", False),
         created_at=user["created_at"],
-        last_login=user.get("last_login")
+        last_login=user.get("last_login"),
     )
 
 

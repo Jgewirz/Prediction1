@@ -7,14 +7,17 @@ Coverage:
 - Environment variable parsing
 - Boundary value validation
 """
-import pytest
+
 import os
-from unittest.mock import patch
 import sys
+from unittest.mock import patch
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import BotConfig, TrendRadarConfig, load_config
 from pydantic import ValidationError
-from config import TrendRadarConfig, BotConfig, load_config
 
 
 class TestTrendRadarConfigValidation:

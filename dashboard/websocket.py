@@ -7,12 +7,13 @@ Handles:
 - Topic-based subscriptions
 - Auto-reconnection support
 """
+
 import asyncio
 import json
-from datetime import datetime
-from typing import Set, Dict, Any, Optional
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, Optional, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
@@ -20,6 +21,7 @@ from loguru import logger
 
 class MessageType(str, Enum):
     """WebSocket message types."""
+
     DECISION = "decision"
     KPI_UPDATE = "kpi_update"
     ALERT = "alert"
@@ -36,16 +38,15 @@ class MessageType(str, Enum):
 @dataclass
 class WebSocketMessage:
     """Structured WebSocket message."""
+
     type: MessageType
     data: Dict[str, Any]
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     def to_json(self) -> str:
-        return json.dumps({
-            "type": self.type.value,
-            "data": self.data,
-            "timestamp": self.timestamp
-        })
+        return json.dumps(
+            {"type": self.type.value, "data": self.data, "timestamp": self.timestamp}
+        )
 
 
 class ConnectionManager:
@@ -72,7 +73,7 @@ class ConnectionManager:
             "workflow": set(),  # CLI workflow step streaming
             "cli_logs": set(),  # Real-time CLI output
             "account": set(),  # Kalshi account updates
-            "all": set()  # Subscribers to everything
+            "all": set(),  # Subscribers to everything
         }
 
         # Connection metadata
@@ -84,7 +85,9 @@ class ConnectionManager:
         # Heartbeat interval (seconds)
         self.heartbeat_interval = 30
 
-    async def connect(self, websocket: WebSocket, client_id: Optional[str] = None) -> None:
+    async def connect(
+        self, websocket: WebSocket, client_id: Optional[str] = None
+    ) -> None:
         """Accept a new WebSocket connection."""
         await websocket.accept()
 
@@ -93,7 +96,7 @@ class ConnectionManager:
             self.connection_info[websocket] = {
                 "client_id": client_id or f"client_{id(websocket)}",
                 "connected_at": datetime.utcnow().isoformat(),
-                "subscriptions": set()
+                "subscriptions": set(),
             }
 
         # Send welcome message
@@ -102,12 +105,14 @@ class ConnectionManager:
             data={
                 "message": "Connected to Kalshi Trading Bot Dashboard",
                 "client_id": self.connection_info[websocket]["client_id"],
-                "available_topics": list(self.subscriptions.keys())
-            }
+                "available_topics": list(self.subscriptions.keys()),
+            },
         )
         await websocket.send_text(welcome.to_json())
 
-        logger.info(f"WebSocket client connected: {self.connection_info[websocket]['client_id']}")
+        logger.info(
+            f"WebSocket client connected: {self.connection_info[websocket]['client_id']}"
+        )
 
     async def disconnect(self, websocket: WebSocket) -> None:
         """Handle client disconnection."""
@@ -119,7 +124,9 @@ class ConnectionManager:
                 topic_subscribers.discard(websocket)
 
             # Get client ID for logging
-            client_id = self.connection_info.get(websocket, {}).get("client_id", "unknown")
+            client_id = self.connection_info.get(websocket, {}).get(
+                "client_id", "unknown"
+            )
             self.connection_info.pop(websocket, None)
 
         logger.info(f"WebSocket client disconnected: {client_id}")
@@ -134,10 +141,7 @@ class ConnectionManager:
                         self.connection_info[websocket]["subscriptions"].add(topic)
 
         # Confirm subscription
-        confirm = WebSocketMessage(
-            type=MessageType.SUBSCRIBED,
-            data={"topics": topics}
-        )
+        confirm = WebSocketMessage(type=MessageType.SUBSCRIBED, data={"topics": topics})
         try:
             await websocket.send_text(confirm.to_json())
         except Exception:
@@ -162,7 +166,9 @@ class ConnectionManager:
 
         async with self._lock:
             # Get subscribers for this topic + "all" subscribers
-            subscribers = self.subscriptions.get(topic, set()) | self.subscriptions.get("all", set())
+            subscribers = self.subscriptions.get(topic, set()) | self.subscriptions.get(
+                "all", set()
+            )
 
             if not subscribers:
                 return 0
@@ -183,65 +189,44 @@ class ConnectionManager:
 
     async def broadcast_decision(self, decision: Dict[str, Any]) -> int:
         """Broadcast a new betting decision to subscribers."""
-        message = WebSocketMessage(
-            type=MessageType.DECISION,
-            data=decision
-        )
+        message = WebSocketMessage(type=MessageType.DECISION, data=decision)
         return await self.broadcast(message, topic="decisions")
 
     async def broadcast_kpi_update(self, kpis: Dict[str, Any]) -> int:
         """Broadcast updated KPIs to subscribers."""
-        message = WebSocketMessage(
-            type=MessageType.KPI_UPDATE,
-            data=kpis
-        )
+        message = WebSocketMessage(type=MessageType.KPI_UPDATE, data=kpis)
         return await self.broadcast(message, topic="kpis")
 
     async def broadcast_alert(self, alert: Dict[str, Any]) -> int:
         """Broadcast an alert to subscribers."""
-        message = WebSocketMessage(
-            type=MessageType.ALERT,
-            data=alert
-        )
+        message = WebSocketMessage(type=MessageType.ALERT, data=alert)
         return await self.broadcast(message, topic="alerts")
 
     async def broadcast_status(self, status: Dict[str, Any]) -> int:
         """Broadcast bot status update."""
-        message = WebSocketMessage(
-            type=MessageType.STATUS,
-            data=status
-        )
+        message = WebSocketMessage(type=MessageType.STATUS, data=status)
         return await self.broadcast(message, topic="status")
 
     async def broadcast_workflow_step(self, step: Dict[str, Any]) -> int:
         """Broadcast a workflow step update (CLI progress streaming)."""
-        message = WebSocketMessage(
-            type=MessageType.WORKFLOW_STEP,
-            data=step
-        )
+        message = WebSocketMessage(type=MessageType.WORKFLOW_STEP, data=step)
         return await self.broadcast(message, topic="workflow")
 
     async def broadcast_cli_log(self, log: Dict[str, Any]) -> int:
         """Broadcast a CLI log entry (real-time terminal output)."""
-        message = WebSocketMessage(
-            type=MessageType.CLI_LOG,
-            data=log
-        )
+        message = WebSocketMessage(type=MessageType.CLI_LOG, data=log)
         return await self.broadcast(message, topic="cli_logs")
 
     async def broadcast_account_update(self, account: Dict[str, Any]) -> int:
         """Broadcast real Kalshi account data update."""
-        message = WebSocketMessage(
-            type=MessageType.ACCOUNT_UPDATE,
-            data=account
-        )
+        message = WebSocketMessage(type=MessageType.ACCOUNT_UPDATE, data=account)
         return await self.broadcast(message, topic="account")
 
     async def send_heartbeat(self) -> None:
         """Send heartbeat to all connected clients."""
         message = WebSocketMessage(
             type=MessageType.HEARTBEAT,
-            data={"connections": len(self.active_connections)}
+            data={"connections": len(self.active_connections)},
         )
         await self.broadcast(message, topic="all")
 
@@ -268,10 +253,10 @@ class ConnectionManager:
                 {
                     "client_id": info.get("client_id"),
                     "connected_at": info.get("connected_at"),
-                    "subscriptions": list(info.get("subscriptions", []))
+                    "subscriptions": list(info.get("subscriptions", [])),
                 }
                 for info in self.connection_info.values()
-            ]
+            ],
         }
 
 
@@ -312,15 +297,13 @@ async def handle_websocket(websocket: WebSocket) -> None:
 
                 elif action == "ping":
                     pong = WebSocketMessage(
-                        type=MessageType.HEARTBEAT,
-                        data={"pong": True}
+                        type=MessageType.HEARTBEAT, data={"pong": True}
                     )
                     await websocket.send_text(pong.to_json())
 
             except json.JSONDecodeError:
                 error = WebSocketMessage(
-                    type=MessageType.ERROR,
-                    data={"message": "Invalid JSON"}
+                    type=MessageType.ERROR, data={"message": "Invalid JSON"}
                 )
                 await websocket.send_text(error.to_json())
 

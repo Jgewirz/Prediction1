@@ -9,18 +9,15 @@ Usage:
     # Broadcast from trading bot
     from dashboard.broadcaster import broadcast_decision, broadcast_kpi_update
 """
-from dashboard.broadcaster import (
-    broadcast_decision,
-    broadcast_kpi_update,
-    broadcast_alert,
-    broadcast_status,
-    DashboardBroadcaster
-)
+
+from dashboard.broadcaster import (DashboardBroadcaster, broadcast_alert,
+                                   broadcast_decision, broadcast_kpi_update,
+                                   broadcast_status)
 
 __all__ = [
     "broadcast_decision",
     "broadcast_kpi_update",
     "broadcast_alert",
     "broadcast_status",
-    "DashboardBroadcaster"
+    "DashboardBroadcaster",
 ]

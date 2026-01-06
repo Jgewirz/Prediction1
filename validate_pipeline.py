@@ -2,6 +2,7 @@
 Comprehensive validation script for the Kalshi Trading Bot pipeline.
 Tests database, API connectivity, decision making, and position placement.
 """
+
 import asyncio
 import os
 import sys
@@ -12,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 console = Console()
 
@@ -23,13 +24,32 @@ async def validate_config():
     console.print("\n[bold cyan]1. Validating Configuration[/bold cyan]")
     try:
         from config import load_config
+
         config = load_config()
 
         results = []
-        results.append(("Kalshi API Key", "SET" if config.kalshi.api_key else "MISSING", bool(config.kalshi.api_key)))
-        results.append(("Kalshi Private Key", "SET" if config.kalshi.private_key else "MISSING", bool(config.kalshi.private_key)))
+        results.append(
+            (
+                "Kalshi API Key",
+                "SET" if config.kalshi.api_key else "MISSING",
+                bool(config.kalshi.api_key),
+            )
+        )
+        results.append(
+            (
+                "Kalshi Private Key",
+                "SET" if config.kalshi.private_key else "MISSING",
+                bool(config.kalshi.private_key),
+            )
+        )
         results.append(("Use Demo", str(config.kalshi.use_demo), True))
-        results.append(("OpenAI API Key", "SET" if config.openai.api_key else "MISSING", bool(config.openai.api_key)))
+        results.append(
+            (
+                "OpenAI API Key",
+                "SET" if config.openai.api_key else "MISSING",
+                bool(config.openai.api_key),
+            )
+        )
         results.append(("Database Type", config.database.db_type, True))
         results.append(("Database Enabled", str(config.database.enable_db), True))
         results.append(("Bankroll", f"${config.max_bet_amount * 4:.2f}", True))
@@ -68,11 +88,17 @@ async def validate_database(config):
             user=config.database.pg_user,
             password=config.database.pg_password,
             port=config.database.pg_port,
-            ssl=config.database.pg_ssl
+            ssl=config.database.pg_ssl,
         )
 
         # Check tables
-        tables = ['betting_decisions', 'run_history', 'market_snapshots', 'calibration_records', 'performance_daily']
+        tables = [
+            "betting_decisions",
+            "run_history",
+            "market_snapshots",
+            "calibration_records",
+            "performance_daily",
+        ]
         table_status = Table(title="Database Tables")
         table_status.add_column("Table", style="cyan")
         table_status.add_column("Row Count", style="white")
@@ -81,7 +107,9 @@ async def validate_database(config):
         all_ok = True
         for table_name in tables:
             try:
-                result = await db.fetchone(f"SELECT COUNT(*) as count FROM {table_name}")
+                result = await db.fetchone(
+                    f"SELECT COUNT(*) as count FROM {table_name}"
+                )
                 count = result["count"] if result else 0
                 table_status.add_row(table_name, str(count), "[green]OK[/green]")
             except Exception as e:
@@ -91,11 +119,13 @@ async def validate_database(config):
         console.print(table_status)
 
         # Get recent activity
-        recent = await db.fetchone("""
+        recent = await db.fetchone(
+            """
             SELECT COUNT(*) as count, MAX(timestamp) as latest
             FROM betting_decisions
             WHERE timestamp > NOW() - INTERVAL '24 hours'
-        """)
+        """
+        )
         if recent:
             console.print(f"  Decisions in last 24h: {recent['count']}")
             console.print(f"  Latest decision: {recent['latest']}")
@@ -104,6 +134,7 @@ async def validate_database(config):
     except Exception as e:
         console.print(f"[red]Database Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
         return False, None
 
@@ -117,7 +148,7 @@ async def validate_kalshi_api(config):
         client = KalshiClient(
             config=config.kalshi,
             minimum_time_remaining_hours=1.0,
-            max_markets_per_event=10
+            max_markets_per_event=10,
         )
 
         results = []
@@ -138,7 +169,7 @@ async def validate_kalshi_api(config):
                 event_table.add_row(
                     event.get("event_ticker", "N/A"),
                     event.get("title", "N/A")[:40],
-                    f"${event.get('volume_24h', 0):,.0f}"
+                    f"${event.get('volume_24h', 0):,.0f}",
                 )
             console.print(event_table)
 
@@ -161,7 +192,7 @@ async def validate_kalshi_api(config):
                         market.get("ticker", "N/A"),
                         f"{market.get('yes_bid', 0)}¢",
                         f"{market.get('yes_ask', 0)}¢",
-                        f"${market.get('volume', 0):,.0f}"
+                        f"${market.get('volume', 0):,.0f}",
                     )
                 console.print(market_table)
 
@@ -173,7 +204,9 @@ async def validate_kalshi_api(config):
             console.print(f"  [green]Account Balance: ${balance:.2f}[/green]")
         except Exception as e:
             results.append(("Get Balance", str(e), False))
-            console.print(f"  [yellow]Balance check failed (may be demo mode): {e}[/yellow]")
+            console.print(
+                f"  [yellow]Balance check failed (may be demo mode): {e}[/yellow]"
+            )
 
         # Test 4: Check positions
         console.print("  Testing positions fetch...")
@@ -194,7 +227,7 @@ async def validate_kalshi_api(config):
                         pos.get("market_ticker", "N/A"),
                         pos.get("position", "N/A"),
                         str(pos.get("total_traded", 0)),
-                        f"{pos.get('market_exposure', 0)}¢"
+                        f"{pos.get('market_exposure', 0)}¢",
                     )
                 console.print(pos_table)
         except Exception as e:
@@ -218,6 +251,7 @@ async def validate_kalshi_api(config):
     except Exception as e:
         console.print(f"[red]Kalshi API Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
         return False, None
 
@@ -228,7 +262,8 @@ async def validate_decision_pipeline(config, db):
 
     try:
         # Check recent decisions
-        result = await db.fetchall("""
+        result = await db.fetchall(
+            """
             SELECT
                 action,
                 COUNT(*) as count,
@@ -239,7 +274,8 @@ async def validate_decision_pipeline(config, db):
             WHERE timestamp > NOW() - INTERVAL '7 days'
             GROUP BY action
             ORDER BY count DESC
-        """)
+        """
+        )
 
         if result:
             table = Table(title="Decision Distribution (Last 7 Days)")
@@ -253,16 +289,17 @@ async def validate_decision_pipeline(config, db):
                 table.add_row(
                     row["action"],
                     str(row["count"]),
-                    f"{row['avg_confidence']:.3f}" if row['avg_confidence'] else "N/A",
-                    f"{row['avg_r_score']:.3f}" if row['avg_r_score'] else "N/A",
-                    f"${row['total_wagered']:.2f}" if row['total_wagered'] else "$0.00"
+                    f"{row['avg_confidence']:.3f}" if row["avg_confidence"] else "N/A",
+                    f"{row['avg_r_score']:.3f}" if row["avg_r_score"] else "N/A",
+                    f"${row['total_wagered']:.2f}" if row["total_wagered"] else "$0.00",
                 )
             console.print(table)
         else:
             console.print("  [yellow]No decisions in the last 7 days[/yellow]")
 
         # Check run history
-        runs = await db.fetchall("""
+        runs = await db.fetchall(
+            """
             SELECT
                 run_id,
                 started_at,
@@ -274,7 +311,8 @@ async def validate_decision_pipeline(config, db):
             FROM run_history
             ORDER BY started_at DESC
             LIMIT 5
-        """)
+        """
+        )
 
         if runs:
             run_table = Table(title="Recent Bot Runs")
@@ -294,17 +332,19 @@ async def validate_decision_pipeline(config, db):
                     str(run["events_analyzed"]),
                     str(run["decisions_made"]),
                     str(run["bets_placed"] or 0),
-                    run["mode"] or "dry_run"
+                    run["mode"] or "dry_run",
                 )
             console.print(run_table)
 
         # Check for actual bets placed
-        bets_placed = await db.fetchone("""
+        bets_placed = await db.fetchone(
+            """
             SELECT COUNT(*) as count, SUM(bet_amount) as total
             FROM betting_decisions
             WHERE action IN ('buy_yes', 'buy_no')
             AND bet_amount > 0
-        """)
+        """
+        )
 
         if bets_placed:
             console.print(f"\n  Total bets placed: {bets_placed['count']}")
@@ -314,6 +354,7 @@ async def validate_decision_pipeline(config, db):
     except Exception as e:
         console.print(f"[red]Decision Pipeline Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -340,30 +381,37 @@ async def run_quick_dry_run(config):
         # Get markets for first event
         console.print("  Fetching markets...")
         event = events[0]
-        markets = await bot.kalshi_client.get_markets(event_ticker=event["event_ticker"], limit=3)
+        markets = await bot.kalshi_client.get_markets(
+            event_ticker=event["event_ticker"], limit=3
+        )
         console.print(f"  Found {len(markets)} markets for {event['event_ticker']}")
 
         if markets:
             console.print("\n  Sample market data:")
             for m in markets[:2]:
-                console.print(f"    - {m.get('ticker')}: Yes bid/ask: {m.get('yes_bid')}¢/{m.get('yes_ask')}¢")
+                console.print(
+                    f"    - {m.get('ticker')}: Yes bid/ask: {m.get('yes_bid')}¢/{m.get('yes_ask')}¢"
+                )
 
         console.print("\n  [green]Dry-run validation successful![/green]")
         return True
     except Exception as e:
         console.print(f"[red]Dry-run Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 async def main():
     """Run all validations."""
-    console.print(Panel.fit(
-        "[bold blue]Kalshi Trading Bot - Pipeline Validation[/bold blue]\n"
-        "Testing database, API, and decision pipeline",
-        border_style="blue"
-    ))
+    console.print(
+        Panel.fit(
+            "[bold blue]Kalshi Trading Bot - Pipeline Validation[/bold blue]\n"
+            "Testing database, API, and decision pipeline",
+            border_style="blue",
+        )
+    )
 
     results = {}
 
@@ -408,17 +456,21 @@ async def main():
     console.print(summary)
 
     if all_passed:
-        console.print(Panel.fit(
-            "[bold green]All validations passed![/bold green]\n"
-            "The trading bot pipeline is working correctly.",
-            border_style="green"
-        ))
+        console.print(
+            Panel.fit(
+                "[bold green]All validations passed![/bold green]\n"
+                "The trading bot pipeline is working correctly.",
+                border_style="green",
+            )
+        )
     else:
-        console.print(Panel.fit(
-            "[bold red]Some validations failed![/bold red]\n"
-            "Please check the errors above.",
-            border_style="red"
-        ))
+        console.print(
+            Panel.fit(
+                "[bold red]Some validations failed![/bold red]\n"
+                "Please check the errors above.",
+                border_style="red",
+            )
+        )
 
 
 if __name__ == "__main__":

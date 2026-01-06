@@ -26,21 +26,22 @@ Components Validated:
 """
 
 import asyncio
+import json
 import os
 import sys
 import time
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
+    from rich import print as rprint
     from rich.console import Console
-    from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich import print as rprint
+    from rich.table import Table
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -133,7 +134,11 @@ async def timed_check(name: str, check_func) -> ValidationResult:
     """Run a check function and time it."""
     start = time.perf_counter()
     try:
-        result = await check_func() if asyncio.iscoroutinefunction(check_func) else check_func()
+        result = (
+            await check_func()
+            if asyncio.iscoroutinefunction(check_func)
+            else check_func()
+        )
         duration = (time.perf_counter() - start) * 1000
 
         if isinstance(result, tuple):
@@ -156,6 +161,7 @@ async def timed_check(name: str, check_func) -> ValidationResult:
 # PHASE 1: Configuration & Environment
 # =============================================================================
 
+
 async def validate_phase1_config() -> PhaseResult:
     """Configuration & Environment"""
     results = PhaseResult(1, "Configuration & Environment")
@@ -172,6 +178,7 @@ async def validate_phase1_config() -> PhaseResult:
     async def check_config_loads():
         try:
             from config import BotConfig
+
             config = BotConfig()
             return Status.PASS, f"Config loaded (demo={config.kalshi.use_demo})"
         except Exception as e:
@@ -181,12 +188,16 @@ async def validate_phase1_config() -> PhaseResult:
 
     async def check_kalshi_creds():
         from config import BotConfig
+
         config = BotConfig()
         if not config.kalshi.api_key:
             return Status.FAIL, "KALSHI_API_KEY not set"
         if not config.kalshi.private_key:
             return Status.FAIL, "KALSHI_PRIVATE_KEY not set"
-        if "BEGIN" not in config.kalshi.private_key and "RSA" not in config.kalshi.private_key:
+        if (
+            "BEGIN" not in config.kalshi.private_key
+            and "RSA" not in config.kalshi.private_key
+        ):
             return Status.WARN, "Private key format may be incorrect"
         return Status.PASS, "Kalshi credentials configured"
 
@@ -194,6 +205,7 @@ async def validate_phase1_config() -> PhaseResult:
 
     async def check_openai_creds():
         from config import BotConfig
+
         config = BotConfig()
         if not config.openai.api_key:
             return Status.FAIL, "OPENAI_API_KEY not set"
@@ -207,7 +219,9 @@ async def validate_phase1_config() -> PhaseResult:
             return Status.PASS, f"DASHBOARD_URL: {dashboard_url[:40]}..."
         return Status.WARN, "DASHBOARD_URL not set (using localhost)"
 
-    results.results.append(await timed_check("Dashboard URL config", check_dashboard_url))
+    results.results.append(
+        await timed_check("Dashboard URL config", check_dashboard_url)
+    )
 
     return results
 
@@ -216,57 +230,68 @@ async def validate_phase1_config() -> PhaseResult:
 # PHASE 2: Database Integrity
 # =============================================================================
 
+
 async def validate_phase2_database() -> PhaseResult:
     """Database Integrity"""
     results = PhaseResult(2, "Database Integrity")
 
     async def check_db_connection():
         from config import BotConfig
+
         config = BotConfig()
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
         await db.connect()
         await db.close()
         return Status.PASS, f"Connected to {config.database.db_type}"
 
-    results.results.append(await timed_check("Database connection", check_db_connection))
+    results.results.append(
+        await timed_check("Database connection", check_db_connection)
+    )
 
     async def check_tables():
         from config import BotConfig
+
         config = BotConfig()
         required = ["betting_decisions", "market_snapshots", "run_history"]
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
             result = await db.fetchall(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
             )
-            existing = {row['table_name'] for row in result}
+            existing = {row["table_name"] for row in result}
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
-            result = await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            result = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
             existing = {row[0] for row in result}
         await db.close()
 
@@ -279,34 +304,41 @@ async def validate_phase2_database() -> PhaseResult:
 
     async def check_recent_data():
         from config import BotConfig
+
         config = BotConfig()
 
         if config.database.db_type == "postgres":
             from db.postgres import PostgresDatabase
+
             db = PostgresDatabase(
                 host=config.database.pg_host,
                 database=config.database.pg_database,
                 user=config.database.pg_user,
                 password=config.database.pg_password,
                 port=config.database.pg_port,
-                ssl=config.database.pg_ssl
+                ssl=config.database.pg_ssl,
             )
             await db.connect()
-            result = await db.fetchone("""
+            result = await db.fetchone(
+                """
                 SELECT COUNT(*) as cnt, MAX(created_at) as latest
                 FROM betting_decisions
                 WHERE created_at > NOW() - INTERVAL '24 hours'
-            """)
-            count = result['cnt'] if result else 0
-            latest = result['latest'] if result else None
+            """
+            )
+            count = result["cnt"] if result else 0
+            latest = result["latest"] if result else None
         else:
             from db.database import Database
+
             db = Database(config.database.db_path)
             await db.connect()
-            result = await db.execute("""
+            result = await db.execute(
+                """
                 SELECT COUNT(*), MAX(created_at) FROM betting_decisions
                 WHERE created_at > datetime('now', '-24 hours')
-            """)
+            """
+            )
             count = result[0][0]
             latest = result[0][1]
         await db.close()
@@ -324,13 +356,15 @@ async def validate_phase2_database() -> PhaseResult:
 # PHASE 3: Kalshi API Integration (with real account data)
 # =============================================================================
 
+
 async def validate_phase3_kalshi() -> PhaseResult:
     """Kalshi API Integration"""
     results = PhaseResult(3, "Kalshi API Integration")
 
     async def check_kalshi_auth():
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
         await client.login()
@@ -340,12 +374,15 @@ async def validate_phase3_kalshi() -> PhaseResult:
             return Status.PASS, f"Authenticated - {len(events)} event(s)"
         return Status.WARN, "Auth OK but no events"
 
-    results.results.append(await timed_check("Kalshi authentication", check_kalshi_auth))
+    results.results.append(
+        await timed_check("Kalshi authentication", check_kalshi_auth)
+    )
 
     async def check_balance_endpoint():
         """Critical: Tests /portfolio/balance endpoint for real account data."""
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
         await client.login()
@@ -354,7 +391,10 @@ async def validate_phase3_kalshi() -> PhaseResult:
 
         # Check if we got an error or valid data
         if balance.get("error"):
-            return Status.FAIL, f"Balance API error: {balance.get('error', 'unknown')[:50]}"
+            return (
+                Status.FAIL,
+                f"Balance API error: {balance.get('error', 'unknown')[:50]}",
+            )
 
         # Valid response has total_equity_dollars calculated
         equity = balance.get("total_equity_dollars", 0)
@@ -362,12 +402,17 @@ async def validate_phase3_kalshi() -> PhaseResult:
             return Status.PASS, f"Balance API OK - Equity: ${equity:.2f}"
         return Status.FAIL, "Balance API returned no data"
 
-    results.results.append(await timed_check("Balance endpoint (/portfolio/balance)", check_balance_endpoint))
+    results.results.append(
+        await timed_check(
+            "Balance endpoint (/portfolio/balance)", check_balance_endpoint
+        )
+    )
 
     async def check_positions_endpoint():
         """Critical: Tests /portfolio/positions endpoint."""
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
         await client.login()
@@ -376,12 +421,17 @@ async def validate_phase3_kalshi() -> PhaseResult:
         count = len(positions) if positions else 0
         return Status.PASS, f"Positions: {count} open"
 
-    results.results.append(await timed_check("Positions endpoint (/portfolio/positions)", check_positions_endpoint))
+    results.results.append(
+        await timed_check(
+            "Positions endpoint (/portfolio/positions)", check_positions_endpoint
+        )
+    )
 
     async def check_account_summary():
         """Tests get_account_summary() which combines balance + positions."""
-        from kalshi_client import KalshiClient
         from config import BotConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
         client = KalshiClient(config.kalshi)
         await client.login()
@@ -389,17 +439,29 @@ async def validate_phase3_kalshi() -> PhaseResult:
         await client.close()
 
         # Check for actual field names returned by get_account_summary()
-        required_fields = ["balance", "portfolio_value", "total_equity",
-                         "open_positions_count", "total_exposure", "realized_pnl", "api_connected"]
+        required_fields = [
+            "balance",
+            "portfolio_value",
+            "total_equity",
+            "open_positions_count",
+            "total_exposure",
+            "realized_pnl",
+            "api_connected",
+        ]
         missing = [f for f in required_fields if f not in summary]
 
         if missing:
             return Status.WARN, f"Missing fields: {missing}"
         if not summary.get("api_connected"):
             return Status.WARN, "API not connected"
-        return Status.PASS, f"Account summary complete - equity: ${summary.get('total_equity', 0):.2f}"
+        return (
+            Status.PASS,
+            f"Account summary complete - equity: ${summary.get('total_equity', 0):.2f}",
+        )
 
-    results.results.append(await timed_check("Account summary aggregation", check_account_summary))
+    results.results.append(
+        await timed_check("Account summary aggregation", check_account_summary)
+    )
 
     return results
 
@@ -408,12 +470,14 @@ async def validate_phase3_kalshi() -> PhaseResult:
 # PHASE 4: Trading Logic & Risk Management
 # =============================================================================
 
+
 async def validate_phase4_trading() -> PhaseResult:
     """Trading Logic & Risk Management"""
     results = PhaseResult(4, "Trading Logic")
 
     async def check_r_score():
         import math
+
         def calc_r(rp, mp):
             std = math.sqrt(mp * (1 - mp))
             return (rp - mp) / std if std > 0 else 0
@@ -422,13 +486,17 @@ async def validate_phase4_trading() -> PhaseResult:
         for rp, mp, expected in tests:
             result = calc_r(rp, mp)
             if abs(result - expected) > 0.02:
-                return Status.FAIL, f"r_score({rp}, {mp})={result:.2f}, expected {expected}"
+                return (
+                    Status.FAIL,
+                    f"r_score({rp}, {mp})={result:.2f}, expected {expected}",
+                )
         return Status.PASS, "R-score calculation correct"
 
     results.results.append(await timed_check("R-score calculation", check_r_score))
 
     async def check_risk_params():
         from config import BotConfig
+
         config = BotConfig()
         issues = []
         if config.max_daily_loss <= 0:
@@ -440,12 +508,16 @@ async def validate_phase4_trading() -> PhaseResult:
 
         if issues:
             return Status.WARN, "; ".join(issues)
-        return Status.PASS, f"Bankroll=${config.bankroll}, MaxBet=${config.max_bet_amount}"
+        return (
+            Status.PASS,
+            f"Bankroll=${config.bankroll}, MaxBet=${config.max_bet_amount}",
+        )
 
     results.results.append(await timed_check("Risk parameters", check_risk_params))
 
     async def check_kill_switch():
         from config import BotConfig
+
         config = BotConfig()
         if not config.enable_kill_switch:
             return Status.WARN, "Kill switch DISABLED"
@@ -459,6 +531,7 @@ async def validate_phase4_trading() -> PhaseResult:
 # =============================================================================
 # PHASE 5: Security Audit
 # =============================================================================
+
 
 async def validate_phase5_security() -> PhaseResult:
     """Security Audit"""
@@ -479,12 +552,15 @@ async def validate_phase5_security() -> PhaseResult:
 
     async def check_env_isolation():
         from config import BotConfig
+
         config = BotConfig()
         if config.kalshi.use_demo:
             return Status.PASS, "Using DEMO environment"
         return Status.WARN, "LIVE trading mode - verify intentional"
 
-    results.results.append(await timed_check("Environment isolation", check_env_isolation))
+    results.results.append(
+        await timed_check("Environment isolation", check_env_isolation)
+    )
 
     return results
 
@@ -493,6 +569,7 @@ async def validate_phase5_security() -> PhaseResult:
 # PHASE 6: Dashboard API & WebSocket
 # =============================================================================
 
+
 async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
     """Dashboard API & WebSocket"""
     results = PhaseResult(6, "Dashboard API")
@@ -500,6 +577,7 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
 
     async def check_health():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/health")
@@ -512,11 +590,14 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check(f"Dashboard health ({base_url[:30]}...)", check_health))
+    results.results.append(
+        await timed_check(f"Dashboard health ({base_url[:30]}...)", check_health)
+    )
 
     async def check_account_endpoint():
         """Tests /api/account endpoint that returns real Kalshi data."""
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/account")
@@ -532,11 +613,14 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("/api/account (real Kalshi data)", check_account_endpoint))
+    results.results.append(
+        await timed_check("/api/account (real Kalshi data)", check_account_endpoint)
+    )
 
     async def check_positions_endpoint():
         """Tests /api/positions endpoint."""
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/positions")
@@ -550,10 +634,13 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("/api/positions", check_positions_endpoint))
+    results.results.append(
+        await timed_check("/api/positions", check_positions_endpoint)
+    )
 
     async def check_kpis_endpoint():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/kpis")
@@ -570,6 +657,7 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
 
     async def check_ws_stats():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/ws/stats")
@@ -587,6 +675,7 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
 
     async def check_freshness():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{base_url}/api/freshness")
@@ -594,7 +683,10 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
                     data = response.json()
                     stale = data.get("is_stale", True)
                     if stale:
-                        return Status.WARN, f"Data stale - {data.get('minutes_since_last', 'unknown')} min old"
+                        return (
+                            Status.WARN,
+                            f"Data stale - {data.get('minutes_since_last', 'unknown')} min old",
+                        )
                     return Status.PASS, "Data fresh"
                 return Status.FAIL, f"Status {response.status_code}"
         except httpx.ConnectError:
@@ -611,6 +703,7 @@ async def validate_phase6_dashboard(remote: bool = False) -> PhaseResult:
 # PHASE 7: Trader ↔ Dashboard Communication
 # =============================================================================
 
+
 async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
     """Trader ↔ Dashboard Communication"""
     results = PhaseResult(7, "Trader-Dashboard Communication")
@@ -618,18 +711,18 @@ async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
 
     async def check_broadcast_decision():
         import httpx
+
         test_decision = {
             "decision_id": "test-validation-12345",
             "action": "skip",
             "market_ticker": "VALIDATION-TEST",
             "market_title": "Validation Test Decision",
-            "bet_amount": 0
+            "bet_amount": 0,
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
-                    f"{base_url}/api/broadcast/decision",
-                    json=test_decision
+                    f"{base_url}/api/broadcast/decision", json=test_decision
                 )
                 if response.status_code == 200:
                     data = response.json()
@@ -640,21 +733,23 @@ async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("POST /api/broadcast/decision", check_broadcast_decision))
+    results.results.append(
+        await timed_check("POST /api/broadcast/decision", check_broadcast_decision)
+    )
 
     async def check_broadcast_cli_log():
         import httpx
+
         test_log = {
             "level": "info",
             "message": "Validation test log entry",
             "source": "validator",
-            "details": {"test": True}
+            "details": {"test": True},
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
-                    f"{base_url}/api/broadcast/cli_log",
-                    json=test_log
+                    f"{base_url}/api/broadcast/cli_log", json=test_log
                 )
                 if response.status_code == 200:
                     return Status.PASS, "CLI log broadcast working"
@@ -664,21 +759,23 @@ async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("POST /api/broadcast/cli_log", check_broadcast_cli_log))
+    results.results.append(
+        await timed_check("POST /api/broadcast/cli_log", check_broadcast_cli_log)
+    )
 
     async def check_broadcast_account():
         import httpx
+
         test_account = {
             "balance_dollars": 100.0,
             "portfolio_value_dollars": 50.0,
             "total_equity_dollars": 150.0,
-            "api_connected": True
+            "api_connected": True,
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
-                    f"{base_url}/api/broadcast/account",
-                    json=test_account
+                    f"{base_url}/api/broadcast/account", json=test_account
                 )
                 if response.status_code == 200:
                     return Status.PASS, "Account broadcast working"
@@ -688,23 +785,31 @@ async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("POST /api/broadcast/account", check_broadcast_account))
+    results.results.append(
+        await timed_check("POST /api/broadcast/account", check_broadcast_account)
+    )
 
     async def check_broadcast_kpis():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(f"{base_url}/api/broadcast/kpis")
                 if response.status_code == 200:
                     data = response.json()
-                    return Status.PASS, f"KPI broadcast to {data.get('sent_to', 0)} clients"
+                    return (
+                        Status.PASS,
+                        f"KPI broadcast to {data.get('sent_to', 0)} clients",
+                    )
                 return Status.FAIL, f"Status {response.status_code}"
         except httpx.ConnectError:
             return Status.SKIP, "Dashboard not reachable"
         except Exception as e:
             return Status.FAIL, str(e)[:50]
 
-    results.results.append(await timed_check("POST /api/broadcast/kpis", check_broadcast_kpis))
+    results.results.append(
+        await timed_check("POST /api/broadcast/kpis", check_broadcast_kpis)
+    )
 
     return results
 
@@ -713,24 +818,32 @@ async def validate_phase7_communication(remote: bool = False) -> PhaseResult:
 # PHASE 8: Early Entry & Market Selection
 # =============================================================================
 
+
 async def validate_phase8_early_entry() -> PhaseResult:
     """Early Entry & Market Selection"""
     results = PhaseResult(8, "Early Entry Strategy")
 
     async def check_early_entry_config():
         from config import BotConfig
+
         config = BotConfig()
         ee = config.early_entry
 
         if not ee.enabled:
             return Status.WARN, "Early entry DISABLED"
 
-        return Status.PASS, f"Max age: {ee.max_market_age_hours}h, Min time: {ee.min_time_remaining_hours}h"
+        return (
+            Status.PASS,
+            f"Max age: {ee.max_market_age_hours}h, Min time: {ee.min_time_remaining_hours}h",
+        )
 
-    results.results.append(await timed_check("Early entry config", check_early_entry_config))
+    results.results.append(
+        await timed_check("Early entry config", check_early_entry_config)
+    )
 
     async def check_unique_market_bonus():
         from config import BotConfig
+
         config = BotConfig()
         ee = config.early_entry
 
@@ -742,10 +855,13 @@ async def validate_phase8_early_entry() -> PhaseResult:
             return Status.FAIL, f"Invalid bonus: {bonus}"
         return Status.PASS, f"Unique event bonus: +{bonus}"
 
-    results.results.append(await timed_check("Unique event bonus config", check_unique_market_bonus))
+    results.results.append(
+        await timed_check("Unique event bonus config", check_unique_market_bonus)
+    )
 
     async def check_new_market_bonus():
         from config import BotConfig
+
         config = BotConfig()
         ee = config.early_entry
 
@@ -756,12 +872,15 @@ async def validate_phase8_early_entry() -> PhaseResult:
         hours = ee.new_market_hours
         return Status.PASS, f"New market (<{hours}h) bonus: +{bonus}"
 
-    results.results.append(await timed_check("New market bonus config", check_new_market_bonus))
+    results.results.append(
+        await timed_check("New market bonus config", check_new_market_bonus)
+    )
 
     async def check_scoring_function():
         """Test the early entry scoring calculation."""
-        from kalshi_client import KalshiClient
         from config import BotConfig, EarlyEntryConfig
+        from kalshi_client import KalshiClient
+
         config = BotConfig()
 
         # Create client with early entry config
@@ -776,7 +895,7 @@ async def validate_phase8_early_entry() -> PhaseResult:
             "series_ticker": None,  # Unique event (no series)
             "strike_period": None,  # No recurring period
             "markets": [],
-            "time_remaining_hours": 72.0  # 3 days remaining - required for time score
+            "time_remaining_hours": 72.0,  # 3 days remaining - required for time score
         }
         test_market = {
             "ticker": "TEST-M1",
@@ -784,7 +903,7 @@ async def validate_phase8_early_entry() -> PhaseResult:
             "volume": 100,
             "open_time": now.isoformat(),  # Just opened
             "created_time": now.isoformat(),
-            "close_time": (now + timedelta(days=3)).isoformat()  # 3 days remaining
+            "close_time": (now + timedelta(days=3)).isoformat(),  # 3 days remaining
         }
 
         # Test unique detection
@@ -801,7 +920,9 @@ async def validate_phase8_early_entry() -> PhaseResult:
             return Status.FAIL, f"Invalid score: {score} (check early_entry_config)"
         return Status.PASS, f"Scoring OK - test score: {score:.2f}"
 
-    results.results.append(await timed_check("Early entry scoring function", check_scoring_function))
+    results.results.append(
+        await timed_check("Early entry scoring function", check_scoring_function)
+    )
 
     return results
 
@@ -810,24 +931,32 @@ async def validate_phase8_early_entry() -> PhaseResult:
 # PHASE 9: Position Monitoring & Stop-Loss
 # =============================================================================
 
+
 async def validate_phase9_position_monitor() -> PhaseResult:
     """Position Monitoring & Stop-Loss"""
     results = PhaseResult(9, "Position Monitoring")
 
     async def check_stop_loss_config():
         from config import BotConfig
+
         config = BotConfig()
         sl = config.stop_loss
 
         if not sl.enabled:
             return Status.WARN, "Stop-loss DISABLED"
 
-        return Status.PASS, f"SL: {sl.default_stop_loss_pct*100}%, TP: {sl.default_take_profit_pct*100}%"
+        return (
+            Status.PASS,
+            f"SL: {sl.default_stop_loss_pct*100}%, TP: {sl.default_take_profit_pct*100}%",
+        )
 
-    results.results.append(await timed_check("Stop-loss config", check_stop_loss_config))
+    results.results.append(
+        await timed_check("Stop-loss config", check_stop_loss_config)
+    )
 
     async def check_monitor_interval():
         from config import BotConfig
+
         config = BotConfig()
         sl = config.stop_loss
 
@@ -838,7 +967,9 @@ async def validate_phase9_position_monitor() -> PhaseResult:
             return Status.WARN, f"Interval too slow: {interval}s"
         return Status.PASS, f"Monitor interval: {interval}s"
 
-    results.results.append(await timed_check("Monitor interval", check_monitor_interval))
+    results.results.append(
+        await timed_check("Monitor interval", check_monitor_interval)
+    )
 
     async def check_position_monitor_class():
         """Test position monitor can be instantiated."""
@@ -846,16 +977,18 @@ async def validate_phase9_position_monitor() -> PhaseResult:
             from position_monitor import PositionMonitor, TriggerType
 
             # Verify trigger types exist
-            if not hasattr(TriggerType, 'STOP_LOSS'):
+            if not hasattr(TriggerType, "STOP_LOSS"):
                 return Status.FAIL, "Missing STOP_LOSS trigger"
-            if not hasattr(TriggerType, 'TAKE_PROFIT'):
+            if not hasattr(TriggerType, "TAKE_PROFIT"):
                 return Status.FAIL, "Missing TAKE_PROFIT trigger"
 
             return Status.PASS, "PositionMonitor class valid"
         except ImportError as e:
             return Status.FAIL, f"Import error: {e}"
 
-    results.results.append(await timed_check("PositionMonitor class", check_position_monitor_class))
+    results.results.append(
+        await timed_check("PositionMonitor class", check_position_monitor_class)
+    )
 
     return results
 
@@ -864,16 +997,17 @@ async def validate_phase9_position_monitor() -> PhaseResult:
 # PHASE 10: Deployment Synchronization
 # =============================================================================
 
+
 async def validate_phase10_deployment() -> PhaseResult:
     """Deployment Synchronization"""
     results = PhaseResult(10, "Deployment Sync")
 
     async def check_local_commit():
         import subprocess
+
         try:
             result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=5
+                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
                 commit = result.stdout.strip()[:7]
@@ -886,6 +1020,7 @@ async def validate_phase10_deployment() -> PhaseResult:
 
     async def check_render_dashboard():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(f"{RENDER_DASHBOARD_URL}/api/health")
@@ -895,10 +1030,13 @@ async def validate_phase10_deployment() -> PhaseResult:
         except Exception as e:
             return Status.SKIP, f"Cannot reach Render: {str(e)[:30]}"
 
-    results.results.append(await timed_check("Render dashboard status", check_render_dashboard))
+    results.results.append(
+        await timed_check("Render dashboard status", check_render_dashboard)
+    )
 
     async def check_render_trader():
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # Try the trading bot's health endpoint if it exists
@@ -909,21 +1047,28 @@ async def validate_phase10_deployment() -> PhaseResult:
         except Exception as e:
             return Status.SKIP, f"Cannot reach Render: {str(e)[:30]}"
 
-    results.results.append(await timed_check("Render trader status", check_render_trader))
+    results.results.append(
+        await timed_check("Render trader status", check_render_trader)
+    )
 
     async def check_dashboard_url_env():
         """Verify DASHBOARD_URL is set correctly for trader → dashboard communication."""
         dashboard_url = os.getenv("DASHBOARD_URL", "")
 
         if not dashboard_url:
-            return Status.WARN, "DASHBOARD_URL not set - broadcasts will go to localhost"
+            return (
+                Status.WARN,
+                "DASHBOARD_URL not set - broadcasts will go to localhost",
+            )
 
         if "onrender.com" in dashboard_url or "localhost" in dashboard_url:
             return Status.PASS, f"DASHBOARD_URL configured: {dashboard_url[:40]}..."
 
         return Status.WARN, f"Unusual DASHBOARD_URL: {dashboard_url[:40]}..."
 
-    results.results.append(await timed_check("DASHBOARD_URL environment", check_dashboard_url_env))
+    results.results.append(
+        await timed_check("DASHBOARD_URL environment", check_dashboard_url_env)
+    )
 
     return results
 
@@ -931,6 +1076,7 @@ async def validate_phase10_deployment() -> PhaseResult:
 # =============================================================================
 # Main Execution
 # =============================================================================
+
 
 async def run_all_validations(remote: bool = False, quick: bool = False) -> list:
     """Run all validation phases."""
@@ -952,7 +1098,11 @@ async def run_all_validations(remote: bool = False, quick: bool = False) -> list
 
     results = []
     for phase_num, phase_func in all_phases:
-        doc = phase_func.__doc__ if hasattr(phase_func, '__doc__') and phase_func.__doc__ else f"Phase {phase_num}"
+        doc = (
+            phase_func.__doc__
+            if hasattr(phase_func, "__doc__") and phase_func.__doc__
+            else f"Phase {phase_num}"
+        )
         print_header(f"Phase {phase_num}: {doc}")
 
         try:
@@ -963,8 +1113,10 @@ async def run_all_validations(remote: bool = False, quick: bool = False) -> list
                 print_result(result)
 
             if console:
-                console.print(f"\n  Summary: {phase_result.passed} passed, "
-                            f"{phase_result.failed} failed, {phase_result.warnings} warnings\n")
+                console.print(
+                    f"\n  Summary: {phase_result.passed} passed, "
+                    f"{phase_result.failed} failed, {phase_result.warnings} warnings\n"
+                )
         except Exception as e:
             if console:
                 console.print(f"  [red]Phase failed: {e}[/red]\n")
@@ -995,28 +1147,38 @@ def print_summary(results: list) -> bool:
 
         for r in results:
             status = "[green]PASS[/green]" if r.success else "[red]FAIL[/red]"
-            table.add_row(f"{r.phase}. {r.name}", str(r.passed), str(r.failed), str(r.warnings), status)
+            table.add_row(
+                f"{r.phase}. {r.name}",
+                str(r.passed),
+                str(r.failed),
+                str(r.warnings),
+                status,
+            )
 
         console.print(table)
         console.print()
 
         if all_passed:
-            console.print(Panel(
-                f"[bold green]SYSTEM IS AIRTIGHT - PRODUCTION READY[/bold green]\n\n"
-                f"Total: {total_passed}/{total_tests} checks passed\n"
-                f"Warnings: {total_warnings}\n\n"
-                f"All critical systems validated successfully.",
-                style="green"
-            ))
+            console.print(
+                Panel(
+                    f"[bold green]SYSTEM IS AIRTIGHT - PRODUCTION READY[/bold green]\n\n"
+                    f"Total: {total_passed}/{total_tests} checks passed\n"
+                    f"Warnings: {total_warnings}\n\n"
+                    f"All critical systems validated successfully.",
+                    style="green",
+                )
+            )
         else:
-            console.print(Panel(
-                f"[bold red]VALIDATION FAILED - NOT PRODUCTION READY[/bold red]\n\n"
-                f"Total: {total_passed}/{total_tests} checks passed\n"
-                f"Failed: {total_failed}\n"
-                f"Warnings: {total_warnings}\n\n"
-                f"Fix failures before deploying to production.",
-                style="red"
-            ))
+            console.print(
+                Panel(
+                    f"[bold red]VALIDATION FAILED - NOT PRODUCTION READY[/bold red]\n\n"
+                    f"Total: {total_passed}/{total_tests} checks passed\n"
+                    f"Failed: {total_failed}\n"
+                    f"Warnings: {total_warnings}\n\n"
+                    f"Fix failures before deploying to production.",
+                    style="red",
+                )
+            )
     else:
         print(f"\nTotal: {total_passed}/{total_tests} passed")
         print(f"Failed: {total_failed}, Warnings: {total_warnings}")
@@ -1029,18 +1191,26 @@ async def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Comprehensive Production Validation")
-    parser.add_argument("--remote", action="store_true", help="Test against Render deployment")
-    parser.add_argument("--quick", action="store_true", help="Core checks only (phases 1-5)")
+    parser.add_argument(
+        "--remote", action="store_true", help="Test against Render deployment"
+    )
+    parser.add_argument(
+        "--quick", action="store_true", help="Core checks only (phases 1-5)"
+    )
     args = parser.parse_args()
 
     if console:
-        console.print(Panel(
-            "[bold]KALSHI TRADING BOT - SYSTEM VALIDATION[/bold]\n"
-            "Comprehensive production readiness check",
-            style="blue"
-        ))
+        console.print(
+            Panel(
+                "[bold]KALSHI TRADING BOT - SYSTEM VALIDATION[/bold]\n"
+                "Comprehensive production readiness check",
+                style="blue",
+            )
+        )
         if args.remote:
-            console.print("[yellow]Testing against REMOTE (Render) deployment[/yellow]\n")
+            console.print(
+                "[yellow]Testing against REMOTE (Render) deployment[/yellow]\n"
+            )
 
     results = await run_all_validations(remote=args.remote, quick=args.quick)
     success = print_summary(results)
@@ -1050,7 +1220,9 @@ async def main():
         console.print("\n[bold yellow]ACTION REQUIRED:[/bold yellow]")
         for r in results:
             if r.failed > 0:
-                console.print(f"  - Fix Phase {r.phase} ({r.name}): {r.failed} failures")
+                console.print(
+                    f"  - Fix Phase {r.phase} ({r.name}): {r.failed} failures"
+                )
 
     sys.exit(0 if success else 1)
 

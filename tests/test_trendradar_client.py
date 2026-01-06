@@ -9,33 +9,29 @@ Coverage:
 - Config validation
 - Response parsing (missing fields, malformed JSON)
 """
-import pytest
+
 import asyncio
 import json
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import asdict
-
+import os
 # Import the modules under test
 import sys
-import os
+import time
+from dataclasses import asdict
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trendradar_client import (
-    TrendingSignal,
-    SignalConfig,
-    calculate_signal_influence,
-    CircuitBreakerConfig,
-    CircuitBreakerState,
-    SignalCache,
-    TrendRadarClient,
-    format_signals_for_research,
-)
-
+from trendradar_client import (CircuitBreakerConfig, CircuitBreakerState,
+                               SignalCache, SignalConfig, TrendingSignal,
+                               TrendRadarClient, calculate_signal_influence,
+                               format_signals_for_research)
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def signal_config():
@@ -112,6 +108,7 @@ def neutral_signal():
 # Signal Influence Calculation Tests
 # ============================================================================
 
+
 class TestCalculateSignalInfluence:
     """Tests for calculate_signal_influence function (v2 single-lever)."""
 
@@ -124,7 +121,9 @@ class TestCalculateSignalInfluence:
         assert result["signal_direction"] == "aligned"
         # V2: Uses probability_adjustment, not confidence_boost
         assert result["probability_adjustment"] > 0
-        assert result["probability_adjustment"] <= signal_config.max_probability_adjustment
+        assert (
+            result["probability_adjustment"] <= signal_config.max_probability_adjustment
+        )
         # V2: Kelly multiplier is always 1.0 (single-lever)
         assert result["kelly_multiplier"] == 1.0
         # Should override skip (strength=0.85, unique_stories=5 >= 5)
@@ -160,7 +159,9 @@ class TestCalculateSignalInfluence:
 
         assert result["signal_direction"] == "conflicting"
         # V2: Conflicting signal adjusts probability opposite direction
-        assert result["probability_adjustment"] > 0  # Positive adjustment for buy_no conflict
+        assert (
+            result["probability_adjustment"] > 0
+        )  # Positive adjustment for buy_no conflict
         # V2: Kelly multiplier is always 1.0
         assert result["kelly_multiplier"] == 1.0
         assert result["should_override_skip"] is False
@@ -280,6 +281,7 @@ class TestCalculateSignalInfluence:
 # Circuit Breaker Tests
 # ============================================================================
 
+
 class TestCircuitBreaker:
     """Tests for circuit breaker behavior."""
 
@@ -338,20 +340,23 @@ class TestCircuitBreaker:
 # Signal Cache Tests
 # ============================================================================
 
+
 class TestSignalCache:
     """Tests for signal caching."""
 
     def test_cache_hit(self):
         """Cached signals are returned on subsequent calls."""
         cache = SignalCache(default_ttl=60.0)
-        signals = [TrendingSignal(
-            topic="Test",
-            sentiment="positive",
-            strength=0.5,
-            source_count=3,
-            sample_headlines=[],
-            platforms=[],
-        )]
+        signals = [
+            TrendingSignal(
+                topic="Test",
+                sentiment="positive",
+                strength=0.5,
+                source_count=3,
+                sample_headlines=[],
+                platforms=[],
+            )
+        ]
 
         cache.set("Event Title", "Politics", signals)
         cached = cache.get("Event Title", "Politics")
@@ -368,14 +373,16 @@ class TestSignalCache:
     def test_cache_expiry(self):
         """Expired entries are not returned."""
         cache = SignalCache(default_ttl=0.1)  # 100ms TTL
-        signals = [TrendingSignal(
-            topic="Test",
-            sentiment="positive",
-            strength=0.5,
-            source_count=3,
-            sample_headlines=[],
-            platforms=[],
-        )]
+        signals = [
+            TrendingSignal(
+                topic="Test",
+                sentiment="positive",
+                strength=0.5,
+                source_count=3,
+                sample_headlines=[],
+                platforms=[],
+            )
+        ]
 
         cache.set("Event Title", "Politics", signals)
         time.sleep(0.15)  # Wait for expiry
@@ -386,14 +393,16 @@ class TestSignalCache:
     def test_cache_key_normalization(self):
         """Cache keys are case-insensitive."""
         cache = SignalCache(default_ttl=60.0)
-        signals = [TrendingSignal(
-            topic="Test",
-            sentiment="positive",
-            strength=0.5,
-            source_count=3,
-            sample_headlines=[],
-            platforms=[],
-        )]
+        signals = [
+            TrendingSignal(
+                topic="Test",
+                sentiment="positive",
+                strength=0.5,
+                source_count=3,
+                sample_headlines=[],
+                platforms=[],
+            )
+        ]
 
         cache.set("EVENT TITLE", "POLITICS", signals)
         result = cache.get("event title", "politics")
@@ -404,6 +413,7 @@ class TestSignalCache:
 # ============================================================================
 # TrendRadar Client Integration Tests
 # ============================================================================
+
 
 class TestTrendRadarClient:
     """Integration tests for TrendRadarClient."""
@@ -457,6 +467,7 @@ class TestTrendRadarClient:
 # Format Signals for Research Tests
 # ============================================================================
 
+
 class TestFormatSignalsForResearch:
     """Tests for format_signals_for_research function."""
 
@@ -483,6 +494,7 @@ class TestFormatSignalsForResearch:
 # ============================================================================
 # Config Validation Tests
 # ============================================================================
+
 
 class TestConfigValidation:
     """Tests for configuration validation."""
